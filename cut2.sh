@@ -1,29 +1,23 @@
 #!/usr/bin/env zsh
 
-# ==============================================================================
-# CONFIGURATION & PARAMETERS
-# ==============================================================================
+# Check if an argument was provided on the command line
+if [[ -z "$1" ]]; then
+  echo "Error: No tape name provided!"
+  echo "Usage: ./process_tape.sh <TAPE_NAME_WITHOUT_EXTENSION>"
+  echo "Example: ./process_tape.sh Raisanen-1987-Willy-40th"
+  exit 1
+fi
 
-VIDIN="Raisanen-1987-Willy-40th"
-
-rm -f "$VIDIN"/*.png(N)
-
-# Format: "IDX START_TIME END_TIME CROP_LEFT CROP_RIGHT CROP_TOP CROP_BOTTOM"
-
-TIMES_LIST=(
-  "01|00:00:01.168|00:02:12.366|12|24|0|8|arrival"
-  "02|00:02:12.366|00:04:41.548|12|24|0|8|kids dance"
-  "03|00:04:41.548|00:22:24.009|12|24|0|8|social time and presents"
-  "04|00:22:24.143|00:25:50.000|12|24|0|8|singer"
-  "05|00:25:50.000|00:28:48.760|12|24|0|8|kids dance"
-  "06|00:28:48.827|00:31:13.004|12|24|0|8|cake"
-  "07|00:31:13.071|00:31:45.237|12|24|0|8|social time"
-  "08|00:31:45.303|00:31:57.716|12|24|0|8|kids in driveway"
-  "09|00:31:57.783|00:33:09.321|12|24|0|8|afterwards"
-)
-
-
+# Set VIDIN from the first command-line argument
+VIDIN="$1"
 INPUT_FILE="${VIDIN}.mkv"
+TIMES_FILE="${VIDIN}.txt"
+
+# Ensure input file exists
+if [[ ! -f "$INPUT_FILE" ]]; then
+  echo "Error: Input file '$INPUT_FILE' not found!"
+  exit 1
+fi
 
 # Set and create output directory
 OUTPUT_DIR="${VIDIN}"
@@ -63,16 +57,20 @@ AUDIO_BITRATE="192k"
 # PIPELINE EXECUTION LOOP
 # ==============================================================================
 
-for TIMES in "${TIMES_LIST[@]}"; do
-  VALS=(${(s:|:)TIMES})
-  IDX=$VALS[1]
-  START_TIME=$VALS[2]
-  END_TIME=$VALS[3]
-  CROP_LEFT_PX=$VALS[4]
-  CROP_RIGHT_PX=$VALS[5]
-  CROP_TOP_PX=$VALS[6]
-  CROP_BOTTOM_PX=$VALS[7]
-  RAW_LABEL=$VALS[8]
+if [[ ! -f "$TIMES_FILE" ]]; then
+  echo "Error: Timestamp file '$TIMES_FILE' not found!"
+  exit 1
+fi
+
+while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TOP_PX CROP_BOTTOM_PX RAW_LABEL; do
+
+  # Strip any accidental hidden whitespace/carriage returns
+  IDX="$(echo -n "$IDX" | xargs)"
+
+  # Skip empty lines or commented lines starting with '#'
+  if [[ -z "$IDX" || "$IDX" == \#* ]]; then
+    continue
+  fi
 
   # Sanitize label for filenames (replaces spaces with hyphens)
   LABEL="${RAW_LABEL// /-}"
@@ -100,7 +98,7 @@ for TIMES in "${TIMES_LIST[@]}"; do
     -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
     -pix_fmt rgb24 -update 1 "$PNG_BEFORE"
 
-  # 2. Process the video using two-stage system, as described above
+  # 2. Process the video using two-stage system
   ffmpeg -hide_banner -loglevel error -y \
     -fflags +genpts+discardcorrupt \
     -ss "$START_TIME" -to "$END_TIME" -i "$INPUT_FILE" \
@@ -119,9 +117,6 @@ for TIMES in "${TIMES_LIST[@]}"; do
     -movflags +faststart -shortest \
     "$OUTPUT_NAME"
 
-  # alternatively, use hardware encoding:
-  # -c:v h264_videotoolbox -q:v 55 -profile:v main -pix_fmt yuv420p \
-
   # 3a. Rendered File First-Frame Check
   ffmpeg -hide_banner -loglevel error -y \
     -i "$OUTPUT_NAME" -vframes 1 \
@@ -133,14 +128,10 @@ for TIMES in "${TIMES_LIST[@]}"; do
     -vf "scale=iw*sar:ih" -pix_fmt rgb24 -update 1 "$PNG_AFTER_LAST"
 
   echo "Done Clip ${IDX}!"
-  echo "Raw first frame:      $PNG_BEFORE"
-  echo "Rendered first frame: $PNG_AFTER_FIRST"
-  echo "Rendered last frame:  $PNG_AFTER_LAST"
-  echo "Video exported:       $OUTPUT_NAME"
-done
+  echo "Video exported: $OUTPUT_NAME"
+
+done < "$TIMES_FILE"
 
 echo "=========================================="
 echo "All active clips completed!"
 echo "=========================================="
-
-

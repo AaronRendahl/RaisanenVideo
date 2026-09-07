@@ -9,7 +9,7 @@ VIDIN="Raisanen-1987a"
 # Format: "IDX START_TIME END_TIME CROP_LEFT CROP_RIGHT CROP_TOP CROP_BOTTOM"
 TIMES_LIST=(
   #"01 00:00:02.350 00:00:51.189 12 24 0 0"
-   "02 00:00:51.225 00:02:41.737 12 24 0 8"
+  #"02 00:00:51.225 00:02:41.737 12 24 0 8"
   #"03 00:02:41.809 00:03:44.204 12 24 0 8"
   #"04 00:03:44.277 00:04:47.754 12 24 0 8"
   #"05 00:04:47.974 00:06:02.696 12 24 0 8"
@@ -88,7 +88,8 @@ for TIMES in "${TIMES_LIST[@]}"; do
   # 1. Raw First-Frame PNG (Uncropped 720x480)
   ffmpeg -hide_banner -loglevel error -y \
     -ss "$START_TIME" -i "$INPUT_FILE" -vframes 1 \
-    -vf "yadif=mode=1:parity=${PARITY}" -pix_fmt rgb24 -update 1 "$PNG_BEFORE"
+    -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
+    -pix_fmt rgb24 -update 1 "$PNG_BEFORE"
 
   # 2. Process the video using two-stage system, as described above
   ffmpeg -hide_banner -loglevel error -y \

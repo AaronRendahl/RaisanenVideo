@@ -1,3 +1,8 @@
+# Step 1. Use this script to convert a clean copy
+# Step 2. Open with LosslessCut. Convert to supported format if asked.
+# Step 3. Find frames to start and end on, and put into cut2.sh
+# Step 4. Run cut2.sh
+
 VIDIN="Raisanen-1987a"
 
 ffmpeg -hide_banner -loglevel error -y \

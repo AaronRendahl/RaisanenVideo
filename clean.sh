@@ -3,7 +3,31 @@
 # Step 3. Find frames to start and end on, and put into cut2.sh
 # Step 4. Run cut2.sh
 
-VIDIN="Raisanen-1987a"
+VIDIN="Raisanen-1987.mpg"
+
+ffmpeg -hide_banner -loglevel error -y \
+  -fflags +genpts+discardcorrupt \
+  -i "${VIDIN}.mpg" \
+  -c:v copy \
+  -c:a copy \
+  -max_muxing_queue_size 1024 \
+  -avoid_negative_ts make_zero \
+  "${VIDIN}.mkv"
+
+# .mkv — "True Archival Purist" Master:
+# Preserves both video and audio bit-for-bit (mpeg2video + MP2). Strips the
+# fragile .mpg container and resets timestamps to t=0 for frame-accurate
+# logging in LosslessCut. Best for untouched archiving.
+
+# .mov — "macOS Integrated" Master:
+# Keeps video bit-exact while decoding audio to raw, uncompressed PCM.
+# 100% loss-free audio quality, perfectly synced, and natively playable in
+# QuickTime and macOS Finder previews (at the cost of larger file size).
+
+# .mp4 — "Universally Compatible" Master:
+# Keeps video bit-exact but re-encodes audio once to high-bitrate AAC.
+# Plays natively on any device or OS. Allows Phase 2 to stream-copy (-c:a copy)
+# the audio without a second lossy re-encode.
 
 ffmpeg -hide_banner -loglevel error -y \
   -fflags +genpts+discardcorrupt \
@@ -16,13 +40,10 @@ ffmpeg -hide_banner -loglevel error -y \
   -movflags +faststart \
   "${VIDIN}.mov"
 
-# ## alternate option, could make a new mp4 but this would reencode the audio
-# ffmpeg -y -fflags +genpts+discardcorrupt \
-#   -i Raisanen-1987a.mpg \
-#   -af "aresample=async=1:first_pts=0" \
-#   -c:v copy -c:a aac -b:a 192k \
-#   -max_muxing_queue_size 1024 \
-#   -avoid_negative_ts make_zero -movflags +faststart \
-#   Raisanen-1987a-clean-v2.mp4
-
-## NOTE: can't just copy the audio if there are discontinuities
+ffmpeg -y -fflags +genpts+discardcorrupt \
+  -i "${VIDIN}.mpg" \
+  -af "aresample=async=1:first_pts=0" \
+  -c:v copy -c:a aac -b:a 192k \
+  -max_muxing_queue_size 1024 \
+  -avoid_negative_ts make_zero -movflags +faststart \
+  "${VIDIN}.mp4"

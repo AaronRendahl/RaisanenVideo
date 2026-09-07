@@ -109,6 +109,9 @@ for TIMES in "${TIMES_LIST[@]}"; do
     -movflags +faststart -shortest \
     "$OUTPUT_NAME"
 
+  # alternatively, use hardware encoding:
+  -c:v h264_videotoolbox -q:v 55 -profile:v main -pix_fmt yuv420p \
+
   # 3a. Rendered File First-Frame Check
   ffmpeg -hide_banner -loglevel error -y \
     -i "$OUTPUT_NAME" -vframes 1 \

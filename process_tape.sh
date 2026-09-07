@@ -17,7 +17,7 @@ fi
 IS_8MM=0
 if [[ "$2" == "8mm" ]]; then
   IS_8MM=1
-  echo ">>> 8mm Silent Mode Active (Speed: 1.5x, Audio: Disabled) <<<"
+  echo ">>> 8mm Silent Mode Active (Speed: 16/24x, Audio: Disabled) <<<"
 fi
 
 # Set VIDIN and corresponding file paths from command-line arguments
@@ -65,7 +65,7 @@ AUDIO_BITRATE="192k"
 #   - crop=...                       : Removes side overscan & bottom head-switching noise.
 #   - setsar=8/9                     : Forces correct 4:3 NTSC display aspect ratio metadata.
 #   - format=yuv420p                 : Downsamples color in RAM to minimize pipe memory bandwidth.
-#   - setpts=(PTS-STARTPTS)/1.5      : Accelerates 16fps silent 8mm film to 24fps when enabled.
+#   - setpts=(PTS-STARTPTS)*1.5      : Slows 16fps silent 8mm film to 24fps when enabled.
 #   - -af "aresample=async=1"        : Prevents audio/video sync drift on dropped tape frames.
 #
 # STAGE 2 (Encoding & Container Packaging):
@@ -109,8 +109,8 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   BASE_VF="yadif=mode=1:parity=${PARITY},${CROP_FILTER},setsar=${SAR},format=yuv420p"
 
   if [[ "$IS_8MM" -eq 1 ]]; then
-    # 8mm Mode: Reset start PTS and accelerate video by 1.5x in Stage 1
-    VF_STAGE1="${BASE_VF},setpts=(PTS-STARTPTS)/1.5"
+    # 8mm Mode: Reset start PTS and slow video by 1.5x in Stage 1
+    VF_STAGE1="${BASE_VF},setpts=(PTS-STARTPTS)*1.5"
     VF_STAGE2="null" # Bypass secondary PTS recalculation in Stage 2
     AUDIO_STAGE1="-an"
     AUDIO_STAGE2="-an"

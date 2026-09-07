@@ -1,15 +1,29 @@
+#!/usr/bin/env zsh
+
 # Step 1. Use this script to convert a clean copy
 # Step 2. Open with LosslessCut. Convert to supported format if asked.
 # Step 3. Find frames to start and end on, and put into cut2.sh
-# Step 4. Run cut2.sh
+# Step 4. Run process_tape.sh
 
-VIDIN="Raisanen-1987.mpg"
+if [[ -z "$1" ]]; then
+  echo "Error: No input file specified!"
+  echo "Usage: ./clean_tape.sh <TAPE_NAME_WITHOUT_EXTENSION> [8mm]"
+  exit 1
+fi
+
+VIDIN="$1"
+AUDIO_ARG="-c:a copy"
+
+if [[ "$2" == "8mm" ]]; then
+  echo ">>> 8mm Mode: Stripping audio stream <<<"
+  AUDIO_ARG="-an"
+fi
 
 ffmpeg -hide_banner -loglevel error -y \
   -fflags +genpts+discardcorrupt \
   -i "${VIDIN}.mpg" \
   -c:v copy \
-  -c:a copy \
+  $=AUDIO_ARG \
   -max_muxing_queue_size 1024 \
   -avoid_negative_ts make_zero \
   "${VIDIN}.mkv"

@@ -128,20 +128,20 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   echo "=========================================="
 
   # 1. Raw First-Frame PNG (Uncropped 720x480)
-  ffmpeg -hide_banner -loglevel error -y \
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
     -ss "$START_TIME" -i "$INPUT_FILE" -vframes 1 \
     -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
     -pix_fmt rgb24 -update 1 "$PNG_BEFORE"
 
   # 2. Process the video using the two-stage RAM pipe
-  ffmpeg -hide_banner -loglevel error -y \
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
     -fflags +genpts+discardcorrupt \
     -ss "$START_TIME" -to "$END_TIME" -i "$INPUT_FILE" \
     -vf "${VF_STAGE1}" \
     $=AUDIO_STAGE1 \
     -c:v rawvideo -pix_fmt yuv420p \
     -f nut pipe:1 | \
-  ffmpeg -hide_banner -loglevel error -y \
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
     -f nut -i pipe:0 \
     -vf "${VF_STAGE2}" \
     -c:v libx264 -crf 22 -preset fast -pix_fmt yuv420p \
@@ -152,12 +152,12 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
     "$OUTPUT_NAME"
 
   # 3a. Rendered File First-Frame Check
-  ffmpeg -hide_banner -loglevel error -y \
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
     -i "$OUTPUT_NAME" -vframes 1 \
     -vf "scale=iw*sar:ih" -pix_fmt rgb24 -update 1 "$PNG_AFTER_FIRST"
 
   # 3b. Rendered File Last-Frame Check
-  ffmpeg -hide_banner -loglevel error -y \
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
     -sseof -1 -i "$OUTPUT_NAME" \
     -vf "scale=iw*sar:ih" -pix_fmt rgb24 -update 1 "$PNG_AFTER_LAST"
 

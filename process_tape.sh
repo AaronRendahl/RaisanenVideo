@@ -17,7 +17,7 @@ fi
 IS_8MM=0
 if [[ "$2" == "8mm" ]]; then
   IS_8MM=1
-  echo ">>> 8mm Silent Mode Active (Speed: 16/24x, Audio: Disabled) <<<"
+  echo ">>> 8mm Silent Mode Active (Speed: 1.5x, Audio: Disabled, Forward Offset: +0.0667s) <<<"
 fi
 
 # Set VIDIN and corresponding file paths from command-line arguments
@@ -50,6 +50,7 @@ rm -f "${OUTPUT_DIR}"/*.png(N)
 PARITY=0                  # 0 = Top Field First (TFF)
 SAR="8/9"                 # NTSC 4:3 Aspect Ratio
 AUDIO_BITRATE="192k"
+FORWARD_OFFSET_8MM=0.0667 # 2-frame NTSC offset (66.7ms) to align LosslessCut with FFmpeg
 
 # ==============================================================================
 # PIPELINE EXECUTION LOOP
@@ -73,6 +74,28 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   PNG_BEFORE="${OUTPUT_DIR}/${VIDIN}-${IDX}-a0.png"
   PNG_AFTER_FIRST="${OUTPUT_DIR}/${VIDIN}-${IDX}-a1.png"
   PNG_AFTER_LAST="${OUTPUT_DIR}/${VIDIN}-${IDX}-a2.png"
+
+  # Convert HH:MM:SS.mmm to total floating-point seconds
+  RAW_START_SEC=$(awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }' <<< "${START_TIME//,/.}")
+  RAW_END_SEC=$(awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }' <<< "${END_TIME//,/.}")
+
+  # Calculate exact clip duration (source time)
+  DURATION=$(awk "BEGIN { print $RAW_END_SEC - $RAW_START_SEC }")
+
+  # Apply the forward shift only if 8mm mode is enabled
+  if [[ "$IS_8MM" -eq 1 ]]; then
+    SEEK_START_SEC=$(awk "BEGIN { print $RAW_START_SEC + $FORWARD_OFFSET_8MM }")
+  else
+    SEEK_START_SEC=$RAW_START_SEC
+  fi
+
+  # Format start seconds back to HH:MM:SS.mmm string for FFmpeg
+  SEEK_START_TIME=$(awk -v s="$SEEK_START_SEC" 'BEGIN {
+    h = int(s / 3600);
+    m = int((s % 3600) / 60);
+    sec = s % 60;
+    printf "%02d:%02d:%06.3f", h, m, sec
+  }')
 
   # Construct Crop Filter
   CROP_W="in_w-${CROP_LEFT_PX}-${CROP_RIGHT_PX}"
@@ -98,19 +121,22 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
 
   echo "=========================================="
   echo "Processing Clip ${IDX} (${RAW_LABEL}): $START_TIME to $END_TIME"
+  if [[ "$IS_8MM" -eq 1 ]]; then
+    echo "8mm Offset Active -> Seek Target: $SEEK_START_TIME (Duration: ${DURATION}s)"
+  fi
   echo "Output Target: $OUTPUT_NAME"
   echo "=========================================="
 
   # 1. Raw First-Frame PNG (Uncropped 720x480)
   ffmpeg -nostdin -hide_banner -loglevel error -y \
-    -ss "$START_TIME" -i "$INPUT_FILE" -vframes 1 \
+    -ss "$SEEK_START_TIME" -i "$INPUT_FILE" -vframes 1 \
     -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
     -pix_fmt rgb24 -update 1 "$PNG_BEFORE"
 
-  # 2. Process the video using the two-stage RAM pipe
+  # 2. Process the video using the two-stage RAM pipe (-t duration)
   ffmpeg -nostdin -hide_banner -loglevel error -y \
     -fflags +genpts+discardcorrupt \
-    -ss "$START_TIME" -to "$END_TIME" -i "$INPUT_FILE" \
+    -ss "$SEEK_START_TIME" -i "$INPUT_FILE" -t "$DURATION" \
     -vf "${VF_STAGE1}" \
     $=AUDIO_STAGE1 \
     -c:v rawvideo -pix_fmt yuv420p \

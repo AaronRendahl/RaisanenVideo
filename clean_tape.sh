@@ -43,21 +43,21 @@ ffmpeg -hide_banner -loglevel error -y \
 # Plays natively on any device or OS. Allows Phase 2 to stream-copy (-c:a copy)
 # the audio without a second lossy re-encode.
 
-ffmpeg -hide_banner -loglevel error -y \
-  -fflags +genpts+discardcorrupt \
-  -i "${VIDIN}.mpg" \
-  -c:v copy \
-  -af "aresample=async=1:first_pts=0" \
-  -c:a pcm_s16le \
-  -max_muxing_queue_size 1024 \
-  -avoid_negative_ts make_zero \
-  -movflags +faststart \
-  "${VIDIN}.mov"
-
-ffmpeg -y -fflags +genpts+discardcorrupt \
-  -i "${VIDIN}.mpg" \
-  -af "aresample=async=1:first_pts=0" \
-  -c:v copy -c:a aac -b:a 192k \
-  -max_muxing_queue_size 1024 \
-  -avoid_negative_ts make_zero -movflags +faststart \
-  "${VIDIN}.mp4"
+# ffmpeg -hide_banner -loglevel error -y \
+#   -fflags +genpts+discardcorrupt \
+#   -i "${VIDIN}.mpg" \
+#   -c:v copy \
+#   -af "aresample=async=1:first_pts=0" \
+#   -c:a pcm_s16le \
+#   -max_muxing_queue_size 1024 \
+#   -avoid_negative_ts make_zero \
+#   -movflags +faststart \
+#   "${VIDIN}.mov"
+#
+# ffmpeg -y -fflags +genpts+discardcorrupt \
+#   -i "${VIDIN}.mpg" \
+#   -af "aresample=async=1:first_pts=0" \
+#   -c:v copy -c:a aac -b:a 192k \
+#   -max_muxing_queue_size 1024 \
+#   -avoid_negative_ts make_zero -movflags +faststart \
+#   "${VIDIN}.mp4"

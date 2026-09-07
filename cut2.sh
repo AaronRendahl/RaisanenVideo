@@ -50,7 +50,7 @@ TIMES_LIST=(
   #"38 01:55:12.341 02:02:12.501 12 24 0 8"
 )
 
-INPUT_FILE="${VIDIN}.mov"
+INPUT_FILE="${VIDIN}.mkv"
 
 # Set and create output directory
 OUTPUT_DIR="${VIDIN}"

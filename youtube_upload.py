@@ -112,16 +112,15 @@ def main():
         return
 
     for file_path in mp4_files:
-        filename = os.path.basename(file_path)
-        raw_title = os.path.splitext(filename)[0]
+        full_filename = os.path.basename(file_path)
+        filename = re.sub(r"_YouTube(?=\.[^.]+$)", "", full_filename, flags=re.IGNORECASE)
         
+        raw_title = os.path.splitext(filename)[0]
         # 1. Clean delimiters to spaces
         t = raw_title.replace("_", " ").replace("-", " ")
-        # 2. Strip trailing "YouTube"
-        t = re.sub(r"\s*YouTube\s*$", "", t, flags=re.IGNORECASE)
-        # 3. Strip leading "Raisanen "
+        # 2. Strip leading "Raisanen "
         t = re.sub(r"^Raisanen\s*", "", t, flags=re.IGNORECASE)
-        # 4. Remove standalone 2-digit numbers and optional leading space, replacing with ": "
+        # 3. Remove standalone 2-digit numbers and optional leading space, replacing with ": "
         title = re.sub(r"\s*\b\d{2}\b\s*", ": ", t).strip()
 
         print("=" * 50)

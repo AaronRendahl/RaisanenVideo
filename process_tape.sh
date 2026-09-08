@@ -85,15 +85,25 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   # Apply the forward shift only if 8mm mode is enabled
   if [[ "$IS_8MM" -eq 1 ]]; then
     SEEK_START_SEC=$(awk "BEGIN { print $RAW_START_SEC + $FORWARD_OFFSET_8MM }")
+    SEEK_END_SEC=$(awk "BEGIN { print $RAW_END_SEC + $FORWARD_OFFSET_8MM }")
   else
     SEEK_START_SEC=$RAW_START_SEC
+    SEEK_END_SEC=$RAW_END_SEC
   fi
 
-  # Format start seconds back to HH:MM:SS.mmm string for FFmpeg
+# Format seconds back to HH:MM:SS.mmm strings for FFmpeg
   SEEK_START_TIME=$(awk -v s="$SEEK_START_SEC" 'BEGIN {
-    h = int(s / 3600);
-    m = int((s % 3600) / 60);
-    sec = s % 60;
+    h = int(s / 3600); m = int((s % 3600) / 60); sec = s % 60;
+    printf "%02d:%02d:%06.3f", h, m, sec
+  }')
+
+  SEEK_END_TIME=$(awk -v s="$SEEK_END_SEC" 'BEGIN {
+    h = int(s / 3600); m = int((s % 3600) / 60); sec = s % 60;
+    printf "%02d:%02d:%06.3f", h, m, sec
+  }')
+
+  DURATION_TIME=$(awk -v s="$DURATION" 'BEGIN {
+    h = int(s / 3600); m = int((s % 3600) / 60); sec = s % 60;
     printf "%02d:%02d:%06.3f", h, m, sec
   }')
 
@@ -120,9 +130,9 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   fi
 
   echo "=========================================="
-  echo "Processing Clip ${IDX} (${RAW_LABEL}): $START_TIME to $END_TIME"
+  echo "Processing Clip ${IDX} (${RAW_LABEL}): $START_TIME to $END_TIME (Duration: ${DURATION_TIME})"
   if [[ "$IS_8MM" -eq 1 ]]; then
-    echo "8mm Offset Active -> Seek Target: $SEEK_START_TIME (Duration: ${DURATION}s)"
+    echo "8mm Offset Active -> Seek Target: $SEEK_START_TIME to $SEEK_END_TIME (Output stretched by 1.5x)"
   fi
   echo "Output Target: $OUTPUT_NAME"
   echo "=========================================="
@@ -133,10 +143,10 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
     -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
     -pix_fmt rgb24 -update 1 "$PNG_BEFORE"
 
-  # 2. Process the video using the two-stage RAM pipe (-t duration)
+  # 2. Process Video using -ss and -to placed BEFORE -i
   ffmpeg -nostdin -hide_banner -loglevel error -y \
     -fflags +genpts+discardcorrupt \
-    -ss "$SEEK_START_TIME" -i "$INPUT_FILE" -t "$DURATION" \
+    -ss "$SEEK_START_TIME" -to "$SEEK_END_TIME" -i "$INPUT_FILE" \
     -vf "${VF_STAGE1}" \
     $=AUDIO_STAGE1 \
     -c:v rawvideo -pix_fmt yuv420p \

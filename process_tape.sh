@@ -1,5 +1,33 @@
 #!/usr/bin/env zsh
 
+# Default flag values
+OPT_PNG_ONLY=false
+OPT_8MM=false
+
+# Parse options
+# The colon after a letter means it requires an argument; no colon means it's a boolean flag.
+while getopts "p8" opt; do
+  case "$opt" in
+    p) OPT_PNG_ONLY=true ;;
+    8) OPT_8MM=true ;;
+    ?)
+       echo "Usage: $0 [-p] [-8] [other args...]"
+       exit 1
+       ;;
+  esac
+done
+
+# Shift off the parsed options so $1, $2, etc., point to remaining positional arguments
+shift $((OPTIND - 1))
+
+if $OPT_8MM; then
+  echo "Mode: 8mm enabled"
+fi
+
+if $OPT_PNG_ONLY; then
+  echo "Mode: Exporting PNGs only"
+fi
+
 # ==============================================================================
 # INPUT ARGUMENTS & VALIDATION
 # ==============================================================================
@@ -14,9 +42,7 @@ if [[ -z "$1" ]]; then
 fi
 
 # Check if "8mm" was passed as the second command-line argument
-IS_8MM=0
-if [[ "$2" == "8mm" ]]; then
-  IS_8MM=1
+if $OPT_8MM; then
   echo ">>> 8mm Silent Mode Active (Speed: 1.5x, Audio: Disabled, Forward Offset: +0.0667s) <<<"
 fi
 
@@ -71,12 +97,15 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
 
   # Construct output paths (MP4 includes label; PNG verification thumbnails do not)
   OUTPUT_NAME="${OUTPUT_DIR}/${VIDIN}-${IDX}-${LABEL}.mp4"
-  PNG_BEFORE="${OUTPUT_DIR}/${VIDIN}-${IDX}-a0.png"
-  PNG_AFTER_FIRST="${OUTPUT_DIR}/${VIDIN}-${IDX}-a1.png"
-  PNG_AFTER_LAST="${OUTPUT_DIR}/${VIDIN}-${IDX}-a2.png"
+  PNG_BEFORE_FIRST="${OUTPUT_DIR}/${VIDIN}-${IDX}-a1.png"
+  PNG_BEFORE_LAST="${OUTPUT_DIR}/${VIDIN}-${IDX}-a3.png"
 
-  PNG_MID_RAW="${OUTPUT_DIR}/${VIDIN}-${IDX}-b1.png"
-  PNG_MID_CROP="${OUTPUT_DIR}/${VIDIN}-${IDX}-b2.png"
+  PNG_MID_RAW="${OUTPUT_DIR}/${VIDIN}-${IDX}-a2.png"
+  PNG_MID_CROP="${OUTPUT_DIR}/${VIDIN}-${IDX}-a2x.png"
+
+  PNG_AFTER_FIRST="${OUTPUT_DIR}/${VIDIN}-${IDX}-b1.png"
+  PNG_AFTER_MID="${OUTPUT_DIR}/${VIDIN}-${IDX}-b2.png"
+  PNG_AFTER_LAST="${OUTPUT_DIR}/${VIDIN}-${IDX}-b3.png"
 
   # Convert HH:MM:SS.mmm to total floating-point seconds
   RAW_START_SEC=$(awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }' <<< "${START_TIME//,/.}")
@@ -86,8 +115,15 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   # Calculate exact clip duration (source time)
   DURATION=$(awk "BEGIN { print $RAW_END_SEC - $RAW_START_SEC }")
 
+  if $OPT_8MM; then
+    RENDERED_MID_SEC=$(awk -v d="$DURATION" 'BEGIN { print (d * 1.5) / 2 }')
+  else
+    RENDERED_MID_SEC=$(awk -v d="$DURATION" 'BEGIN { print d / 2 }')
+  fi
+
+
   # Apply the forward shift only if 8mm mode is enabled
-  if [[ "$IS_8MM" -eq 1 ]]; then
+  if $OPT_8MM; then
     SEEK_START_SEC=$(awk "BEGIN { print $RAW_START_SEC + $FORWARD_OFFSET_8MM }")
     SEEK_END_SEC=$(awk "BEGIN { print $RAW_END_SEC + $FORWARD_OFFSET_8MM }")
     SEEK_MID_SEC=$(awk "BEGIN { print $RAW_MID_SEC + $FORWARD_OFFSET_8MM }")
@@ -108,11 +144,6 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
     printf "%02d:%02d:%06.3f", h, m, sec
   }')
 
-  SEEK_MID_TIME=$(awk -v s="$SEEK_MID_SEC" 'BEGIN {
-    h = int(s / 3600); m = int((s % 3600) / 60); sec = s % 60;
-    printf "%02d:%02d:%06.3f", h, m, sec
-  }')
-
   DURATION_TIME=$(awk -v s="$DURATION" 'BEGIN {
     h = int(s / 3600); m = int((s % 3600) / 60); sec = s % 60;
     printf "%02d:%02d:%06.3f", h, m, sec
@@ -126,7 +157,7 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   # Base Video Filters: Deinterlace -> Crop -> Aspect Ratio -> Color Format
   BASE_VF="yadif=mode=1:parity=${PARITY},${CROP_FILTER},setsar=${SAR},format=yuv420p"
 
-  if [[ "$IS_8MM" -eq 1 ]]; then
+  if $OPT_8MM; then
     # 8mm Mode: Reset start PTS and slow video by 1.5x in Stage 1
     VF_STAGE1="${BASE_VF},setpts=(PTS-STARTPTS)*1.5"
     VF_STAGE2="null" # Bypass secondary PTS recalculation in Stage 2
@@ -142,34 +173,43 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
 
   echo "=========================================="
   echo "Processing Clip ${IDX} (${RAW_LABEL}): $START_TIME to $END_TIME (Duration: ${DURATION_TIME})"
-  if [[ "$IS_8MM" -eq 1 ]]; then
+  if $OPT_8MM; then
     echo "8mm Offset Active -> Seek Target: $SEEK_START_TIME to $SEEK_END_TIME (Output stretched by 1.5x)"
   fi
   echo "Output Target: $OUTPUT_NAME"
   echo "=========================================="
 
-  # 1. Raw First-Frame PNG (Uncropped 720x480)
+if $OPT_PNG_ONLY; then
+  # 1a. Raw First-Frame PNG (Uncropped 720x480)
   ffmpeg -nostdin -hide_banner -loglevel error -y \
-    -ss "$SEEK_START_TIME" -i "$INPUT_FILE" -vframes 1 \
+    -ss "$SEEK_START_SEC" -i "$INPUT_FILE" -vframes 1 \
     -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
-    -pix_fmt rgb24 -update 1 "$PNG_BEFORE"
+    -pix_fmt rgb24 -update 1 "$PNG_BEFORE_FIRST"
 
-  # 1. Raw Partway PNG (Uncropped 720x480)
+  # 1b. Raw Last-Frame PNG (Uncropped 720x480)
   ffmpeg -nostdin -hide_banner -loglevel error -y \
-    -ss "$SEEK_MID_TIME" -i "$INPUT_FILE" -vframes 1 \
+    -ss "$SEEK_END_SEC" -i "$INPUT_FILE" -vframes 1 \
+    -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
+    -pix_fmt rgb24 -update 1 "$PNG_BEFORE_LAST"
+
+  # 2a. Raw Partway PNG (Uncropped 720x480)
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
+    -ss "$SEEK_MID_SEC" -i "$INPUT_FILE" -vframes 1 \
     -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
     -pix_fmt rgb24 -update 1 "$PNG_MID_RAW"
 
-  # 1. Cropped Partway PNG
+  # 2b. Cropped Partway PNG
   ffmpeg -nostdin -hide_banner -loglevel error -y \
-    -ss "$SEEK_MID_TIME" -i "$INPUT_FILE" -vframes 1 \
+    -ss "$SEEK_MID_SEC" -i "$INPUT_FILE" -vframes 1 \
     -vf "${BASE_VF}, scale=iw*sar:ih" \
     -pix_fmt rgb24 -update 1 "$PNG_MID_CROP"
 
-  2. Process Video using -ss and -to placed BEFORE -i
+else
+
+  # 2. Process Video using -ss and -to placed BEFORE -i
   ffmpeg -nostdin -hide_banner -loglevel error -y \
     -fflags +genpts+discardcorrupt \
-    -ss "$SEEK_START_TIME" -to "$SEEK_END_TIME" -i "$INPUT_FILE" \
+    -ss "$SEEK_START_SEC" -to "$SEEK_END_SEC" -i "$INPUT_FILE" \
     -vf "${VF_STAGE1}" \
     $=AUDIO_STAGE1 \
     -c:v rawvideo -pix_fmt yuv420p \
@@ -189,10 +229,16 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
     -i "$OUTPUT_NAME" -vframes 1 \
     -vf "scale=iw*sar:ih" -pix_fmt rgb24 -update 1 "$PNG_AFTER_FIRST"
 
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
+    -ss "$RENDERED_MID_SEC" -i "$OUTPUT_NAME" -vframes 1 \
+    -vf "scale=iw*sar:ih" -pix_fmt rgb24 -update 1 "$PNG_AFTER_MID"
+
   # 3b. Rendered File Last-Frame Check
   ffmpeg -nostdin -hide_banner -loglevel error -y \
     -sseof -1 -i "$OUTPUT_NAME" \
     -vf "scale=iw*sar:ih" -pix_fmt rgb24 -update 1 "$PNG_AFTER_LAST"
+
+fi
 
   echo "Done Clip ${IDX}!"
   echo "Video exported: $OUTPUT_NAME"

@@ -75,9 +75,13 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   PNG_AFTER_FIRST="${OUTPUT_DIR}/${VIDIN}-${IDX}-a1.png"
   PNG_AFTER_LAST="${OUTPUT_DIR}/${VIDIN}-${IDX}-a2.png"
 
+  PNG_MID_RAW="${OUTPUT_DIR}/${VIDIN}-${IDX}-b1.png"
+  PNG_MID_CROP="${OUTPUT_DIR}/${VIDIN}-${IDX}-b2.png"
+
   # Convert HH:MM:SS.mmm to total floating-point seconds
   RAW_START_SEC=$(awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }' <<< "${START_TIME//,/.}")
   RAW_END_SEC=$(awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }' <<< "${END_TIME//,/.}")
+  RAW_MID_SEC=$(awk -v start="$RAW_START_SEC" -v end="$RAW_END_SEC" 'BEGIN { print (start + end) / 2 }')
 
   # Calculate exact clip duration (source time)
   DURATION=$(awk "BEGIN { print $RAW_END_SEC - $RAW_START_SEC }")
@@ -86,9 +90,11 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   if [[ "$IS_8MM" -eq 1 ]]; then
     SEEK_START_SEC=$(awk "BEGIN { print $RAW_START_SEC + $FORWARD_OFFSET_8MM }")
     SEEK_END_SEC=$(awk "BEGIN { print $RAW_END_SEC + $FORWARD_OFFSET_8MM }")
+    SEEK_MID_SEC=$(awk "BEGIN { print $RAW_MID_SEC + $FORWARD_OFFSET_8MM }")
   else
     SEEK_START_SEC=$RAW_START_SEC
     SEEK_END_SEC=$RAW_END_SEC
+    SEEK_MID_SEC=$RAW_MID_SEC
   fi
 
 # Format seconds back to HH:MM:SS.mmm strings for FFmpeg
@@ -98,6 +104,11 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
   }')
 
   SEEK_END_TIME=$(awk -v s="$SEEK_END_SEC" 'BEGIN {
+    h = int(s / 3600); m = int((s % 3600) / 60); sec = s % 60;
+    printf "%02d:%02d:%06.3f", h, m, sec
+  }')
+
+  SEEK_MID_TIME=$(awk -v s="$SEEK_MID_SEC" 'BEGIN {
     h = int(s / 3600); m = int((s % 3600) / 60); sec = s % 60;
     printf "%02d:%02d:%06.3f", h, m, sec
   }')
@@ -143,7 +154,19 @@ while IFS="|" read -r IDX START_TIME END_TIME CROP_LEFT_PX CROP_RIGHT_PX CROP_TO
     -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
     -pix_fmt rgb24 -update 1 "$PNG_BEFORE"
 
-  # 2. Process Video using -ss and -to placed BEFORE -i
+  # 1. Raw Partway PNG (Uncropped 720x480)
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
+    -ss "$SEEK_MID_TIME" -i "$INPUT_FILE" -vframes 1 \
+    -vf "yadif=mode=1:parity=${PARITY}, scale=iw*sar:ih" \
+    -pix_fmt rgb24 -update 1 "$PNG_MID_RAW"
+
+  # 1. Cropped Partway PNG
+  ffmpeg -nostdin -hide_banner -loglevel error -y \
+    -ss "$SEEK_MID_TIME" -i "$INPUT_FILE" -vframes 1 \
+    -vf "${BASE_VF}, scale=iw*sar:ih" \
+    -pix_fmt rgb24 -update 1 "$PNG_MID_CROP"
+
+  2. Process Video using -ss and -to placed BEFORE -i
   ffmpeg -nostdin -hide_banner -loglevel error -y \
     -fflags +genpts+discardcorrupt \
     -ss "$SEEK_START_TIME" -to "$SEEK_END_TIME" -i "$INPUT_FILE" \

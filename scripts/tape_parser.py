@@ -102,18 +102,18 @@ def parse_tape_spec(text_content: str) -> ArchiveData:
             # Auto-chain: My end time is the next item's start time
             chronological_sequence[i].end = chronological_sequence[i+1].start
 
-    # B. Inherit Missing Dates/Crops & Sync Parent Boundaries
+    # B. Inherit Missing Dates & Apply Global/Default Crop
     last_date = ""
-    last_crop = global_crop
-    
+
     for clip in clips:
-        # Cascade missing metadata downwards
+        # Dates cascade down from previous clips if omitted
         clip.date = clip.date if clip.date else last_date
-        clip.crop = clip.crop if clip.crop else last_crop
         last_date = clip.date
-        last_crop = clip.crop
-        
-        # If the clip has subchapters, the clip's boundaries are defined by them
+
+        # Crops fall back directly to global_crop if not explicitly specified on the row
+        clip.crop = clip.crop if clip.crop else global_crop
+
+        # Sync parent clip boundaries if subchapters exist
         if clip.subchapters:
             clip.start = clip.subchapters[0].start
             clip.end = clip.subchapters[-1].end

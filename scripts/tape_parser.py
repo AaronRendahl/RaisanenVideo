@@ -28,6 +28,22 @@ class ArchiveData:
     raw_spec: str
     clips: List[Clip] = dataclasses.field(default_factory=list)
 
+    def resolve_missing_end_times(self, total_duration: str):
+        """Fills any remaining empty end timestamps with total_duration."""
+        if not self.clips:
+            return
+
+        last_clip = self.clips[-1]
+
+        # If the last clip has subchapters and the last subchapter has no end time
+        if last_clip.subchapters and not last_clip.subchapters[-1].end:
+            last_clip.subchapters[-1].end = total_duration
+            last_clip.end = total_duration
+
+        # If the last clip itself has no end time
+        elif not last_clip.end:
+            last_clip.end = total_duration
+
 # ==========================================
 # 2. The Parser Logic
 # ==========================================

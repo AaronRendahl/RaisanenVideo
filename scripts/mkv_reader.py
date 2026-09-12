@@ -1,47 +1,70 @@
-import sys
+import json
+import subprocess
 from pathlib import Path
-
-from mkv_writer import generate_mkv_chapters_xml, generate_mkv_tags_xml
-from spec_reader import read_tape_spec
+from models import ArchiveData, Clip, Subchapter
 
 
-def test_mkv_xml_generation(file_path: str):
-    path = Path(file_path)
-    if not path.is_file():
-        print(f"Error: File '{path}' not found.")
-        return
+def format_ffprobe_timestamp(seconds_str: str) -> str:
+    """Converts ffprobe time in seconds (e.g. '5772.666000') to HH:MM:SS.mmm format."""
+    try:
+        total_seconds = float(seconds_str)
+    except (ValueError, TypeError):
+        return "00:00:00.000"
 
-    print("=" * 65)
-    print(f" TESTING REAL SPEC: {path.name}")
-    print("=" * 65)
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+    seconds = total_seconds % 60
 
-    # 1. Read real txt spec
-    raw_text = path.read_text(encoding="utf-8")
-    data = read_tape_spec(raw_text)
-
-    # 2. Print collected warnings if any
-    data.print_warnings()
-
-    # 3. Generate Matroska XMLs
-    chapters_xml = generate_mkv_chapters_xml(data)
-    tags_xml = generate_mkv_tags_xml(data)
-
-    print("\n--- GENERATED MATROSKA CHAPTERS XML ---")
-    print(chapters_xml)
-
-    print("--- GENERATED MATROSKA TAGS XML ---")
-    print(tags_xml)
+    return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
 
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        test_mkv_xml_generation(sys.argv[1])
-    else:
-        # Automatically pick the first .txt file found in specs directory or current directory
-        txt_files = list(Path(".").glob("*.txt")) + list(
-            Path("../specs").glob("*.txt")
+def read_mkv_metadata(mkv_path: str) -> ArchiveData:
+    """Reads chapters and global tags from an MKV file via ffprobe and returns ArchiveData."""
+    cmd = [
+        "ffprobe",
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_chapters",
+        "-show_format",
+        mkv_path,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    probe_data = json.loads(result.stdout)
+
+    format_info = probe_data.get("format", {})
+    global_tags = format_info.get("tags", {})
+
+    # Extract global metadata tags
+    global_crop = global_tags.get("CROPPING", "")
+    raw_spec = global_tags.get("ARCHIVE_SPEC", "")
+
+    # Parse chapters hierarchy
+    raw_chapters = probe_data.get("chapters", [])
+    clips = []
+
+    for idx, chap in enumerate(raw_chapters, start=1):
+        chap_tags = chap.get("tags", {})
+        title = chap_tags.get("title", f"Clip {idx}")
+
+        start_time = format_ffprobe_timestamp(chap.get("start_time", "0"))
+        end_time = format_ffprobe_timestamp(chap.get("end_time", "0"))
+
+        clip_idx = f"{idx:02d}"
+
+        # Build clip instance
+        clip = Clip(
+            idx=clip_idx,
+            start=start_time,
+            end=end_time,
+            title=title,
+            date="",
+            crop=global_crop,
         )
-        if txt_files:
-            test_mkv_xml_generation(str(txt_files[0]))
-        else:
-            print("Usage: python test_mkv_writer.py path/to/your_tape_spec.txt")
+        clips.append(clip)
+
+    return ArchiveData(
+        global_crop=global_crop,
+        raw_spec=raw_spec,
+        clips=clips,
+    )

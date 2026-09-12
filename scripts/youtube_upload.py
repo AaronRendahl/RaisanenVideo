@@ -23,8 +23,12 @@ a = ["Raisanen-1987-Willy-40th", "PLS3A71dZhi3k"]
 VIDEO_DIR, PLAYLIST_ID = a
 
 # Configurable variables
-SECRETS_FILE = "youtube_secrets.json"
-TOKEN_FILE = "token.json"
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+CREDENTIALS_DIR = PROJECT_ROOT / "credentials"
+SECRETS_FILE = CREDENTIALS_DIR / "youtube_secrets.json"
+TOKEN_FILE = CREDENTIALS_DIR / "token.json"
+
 SCOPES = ["https://www.googleapis.com/auth/youtube"]
 
 def authenticate():

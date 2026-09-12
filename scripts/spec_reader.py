@@ -78,14 +78,12 @@ def read_tape_spec(text_content: str) -> ArchiveData:
         if not chronological_sequence[i].end:
             chronological_sequence[i].end = chronological_sequence[i + 1].start
 
-    # Post-Processing: Cascading Metadata & Global Crop Fallback
-    last_date = ""
-
+    # Post-Processing: Subchapter boundary syncing & Global crop fallbacks
     for clip in clips:
-        clip.date = clip.date if clip.date else last_date
+        # Fall back to global crop if no custom crop was defined for this clip
         clip.crop = clip.crop if clip.crop else global_crop
-        last_date = clip.date
 
+        # Sync parent clip boundaries if subchapters exist
         if clip.subchapters:
             clip.start = clip.subchapters[0].start
             clip.end = clip.subchapters[-1].end

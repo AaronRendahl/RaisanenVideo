@@ -4,29 +4,74 @@
 # Step 2. Open with LosslessCut. Convert to supported format if asked.
 # Step 3. Find frames to start and end on, and put into tapename.txt
 # Step 4. Run process_tape.sh
+# Default flag values
+
+OPT_8MM=false
+TAPE_DATE=""
+
+# Parse options
+while getopts "8d:" opt; do
+  case "$opt" in
+    8) OPT_8MM=true ;;
+    d) TAPE_DATE="$OPTARG" ;;
+    ?)
+       echo "Usage: $0 [-8] [-d YYYY-MM-DD] <TAPE_NAME_WITHOUT_EXTENSION> [TITLE]"
+       exit 1
+       ;;
+  esac
+done
+
+shift $((OPTIND - 1))
 
 if [[ -z "$1" ]]; then
   echo "Error: No input file specified!"
-  echo "Usage: ./clean_tape.sh <TAPE_NAME_WITHOUT_EXTENSION> [8mm]"
+  echo "Usage: $0 [-8] [-d YYYY-MM-DD] <TAPE_NAME_WITHOUT_EXTENSION> [TITLE]"
   exit 1
 fi
 
 VIDIN="$1"
-AUDIO_ARG="-c:a copy"
+TAPE_TITLE="$2"
+INPUT_FILE="${VIDIN}.mpg"
+OUTPUT_FILE="${VIDIN}.mkv"
 
-if [[ "$2" == "8mm" ]]; then
-  echo ">>> 8mm Mode: Stripping audio stream <<<"
-  AUDIO_ARG="-an"
+if [[ ! -f "$INPUT_FILE" ]]; then
+  echo "Error: Input file '$INPUT_FILE' not found!"
+  exit 1
 fi
+
+# Configure Audio Stream
+if $OPT_8MM; then
+  AUDIO_ARG="-an"
+else
+  AUDIO_ARG="-c:a copy"
+fi
+
+# Build Metadata Array
+METADATA_ARGS=()
+
+if [[ -n "$TAPE_TITLE" ]]; then
+  echo ">>> Embedding Title Metadata: \"$TAPE_TITLE\" <<<"
+  METADATA_ARGS+=(-metadata "title=$TAPE_TITLE")
+fi
+
+if [[ -n "$TAPE_DATE" ]]; then
+  echo ">>> Embedding Date Metadata: \"$TAPE_DATE\" <<<"
+  METADATA_ARGS+=(-metadata "date=$TAPE_DATE" -metadata "creation_time=$TAPE_DATE")
+fi
+
+echo "Cleaning tape '$INPUT_FILE' -> '$OUTPUT_FILE'..."
 
 ffmpeg -hide_banner -loglevel error -y \
   -fflags +genpts+discardcorrupt \
-  -i "${VIDIN}.mpg" \
+  -i "$INPUT_FILE" \
   -c:v copy \
-  $=AUDIO_ARG \
+  ${=AUDIO_ARG} \
+  "${METADATA_ARGS[@]}" \
   -max_muxing_queue_size 1024 \
   -avoid_negative_ts make_zero \
-  "${VIDIN}.mkv"
+  "$OUTPUT_FILE"
+
+echo "Done! File saved to $OUTPUT_FILE"
 
 # .mkv — "True Archival Purist" Master:
 # Preserves both video and audio bit-for-bit (mpeg2video + MP2). Strips the

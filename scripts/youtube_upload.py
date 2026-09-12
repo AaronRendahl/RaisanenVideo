@@ -13,12 +13,12 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 # Set to True to test filenames/titles without uploading. Set to False when ready to run for real!
-DRY_RUN = True
+DRY_RUN = False
 
 # Select active dataset
 #a = ["Raisanen-8mm-YouTube", "PLZU-iO-9yMMo"]
 #a = ["Raisanen-1987a", "PLMk6OgsEIKZ0"]
-#a = ["Raisanen-1987-Willy-40th", "PLS3A71dZhi3k"]
+a = ["Raisanen-1987-Willy-40th", "PLS3A71dZhi3k"]
 
 VIDEO_DIR, PLAYLIST_ID = a
 

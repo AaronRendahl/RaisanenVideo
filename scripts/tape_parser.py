@@ -7,6 +7,7 @@ from typing import List
 
 @dataclasses.dataclass
 class Subchapter:
+    idx: str
     start: str
     end: str
     title: str

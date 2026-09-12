@@ -1,6 +1,5 @@
 import json
 import subprocess
-from pathlib import Path
 from models import ArchiveData, Clip, Subchapter
 
 
@@ -19,11 +18,13 @@ def format_ffprobe_timestamp(seconds_str: str) -> str:
 
 
 def read_mkv_metadata(mkv_path: str) -> ArchiveData:
-    """Reads chapters and global tags from an MKV file via ffprobe and returns ArchiveData."""
+    """Reads chapters and global tags from an MKV file via ffprobe and reconstructs ArchiveData."""
     cmd = [
         "ffprobe",
-        "-v", "quiet",
-        "-print_format", "json",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
         "-show_chapters",
         "-show_format",
         mkv_path,
@@ -34,37 +35,33 @@ def read_mkv_metadata(mkv_path: str) -> ArchiveData:
 
     format_info = probe_data.get("format", {})
     global_tags = format_info.get("tags", {})
-
-    # Extract global metadata tags
     global_crop = global_tags.get("CROPPING", "")
-    raw_spec = global_tags.get("ARCHIVE_SPEC", "")
 
-    # Parse chapters hierarchy
     raw_chapters = probe_data.get("chapters", [])
     clips = []
 
     for idx, chap in enumerate(raw_chapters, start=1):
         chap_tags = chap.get("tags", {})
         title = chap_tags.get("title", f"Clip {idx}")
+        date = chap_tags.get("DATE_RECORDED", "")
 
         start_time = format_ffprobe_timestamp(chap.get("start_time", "0"))
         end_time = format_ffprobe_timestamp(chap.get("end_time", "0"))
 
         clip_idx = f"{idx:02d}"
 
-        # Build clip instance
         clip = Clip(
             idx=clip_idx,
             start=start_time,
             end=end_time,
             title=title,
-            date="",
+            date=date,
             crop=global_crop,
         )
         clips.append(clip)
 
     return ArchiveData(
         global_crop=global_crop,
-        raw_spec=raw_spec,
+        raw_spec="",  # Single source of truth: no embedded raw text stored
         clips=clips,
     )

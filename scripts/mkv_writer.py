@@ -24,24 +24,26 @@ def format_mkv_timestamp(ts: str) -> str:
     return f"{time_part}.{ms_padded}"
 
 
+def parse_crop_string(crop_str: str):
+    """Parses 'Top|Bottom|Left|Right' spec string into integer tuple (top, bottom, left, right)."""
+    if not crop_str:
+        return None
+    try:
+        parts = [int(p.strip()) for p in crop_str.split("|")]
+        if len(parts) == 4:
+            return parts[0], parts[1], parts[2], parts[3]
+    except ValueError:
+        pass
+    return None
+
+
 def generate_mkv_chapters_and_tags(data: ArchiveData):
-    """Generates Matroska XML chapters and tags from ArchiveData using ChapterUIDs for clip metadata."""
+    """Generates Matroska XML chapters and tags from ArchiveData."""
     chapters_root = ET.Element("Chapters")
     edition = ET.SubElement(chapters_root, "EditionEntry")
     ET.SubElement(edition, "EditionFlagDefault").text = "1"
 
     tags_root = ET.Element("Tags")
-
-    # 1. Global Container Crop Tag (TargetTypeValue 50 = MOVIE/TAPE)
-    if data.global_crop:
-        g_tag = ET.SubElement(tags_root, "Tag")
-        g_targets = ET.SubElement(g_tag, "Targets")
-        ET.SubElement(g_targets, "TargetTypeValue").text = "50"
-
-        simple = ET.SubElement(g_tag, "Simple")
-        ET.SubElement(simple, "name").text = "CROPPING"
-        ET.SubElement(simple, "string").text = data.global_crop
-
     uid_counter = 1000
 
     for clip in data.clips:
@@ -104,7 +106,7 @@ def generate_mkv_chapters_and_tags(data: ArchiveData):
 
 
 def write_mkv_metadata(mkv_path: str, data: ArchiveData) -> None:
-    """In-place updates an MKV file's chapters and tags using mkvpropedit."""
+    """In-place updates an MKV file's chapters, tags, and native video track crop fields using mkvpropedit."""
     chapters_xml, tags_xml = generate_mkv_chapters_and_tags(data)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -126,6 +128,25 @@ def write_mkv_metadata(mkv_path: str, data: ArchiveData) -> None:
             f"global:{tags_file}",
         ]
 
+        # Apply native video track cropping header properties
+        crop_vals = parse_crop_string(data.global_crop)
+        if crop_vals:
+            top, bottom, left, right = crop_vals
+            cmd.extend(
+                [
+                    "--edit",
+                    "track:v1",
+                    "--set",
+                    f"pixel-crop-top={top}",
+                    "--set",
+                    f"pixel-crop-bottom={bottom}",
+                    "--set",
+                    f"pixel-crop-left={left}",
+                    "--set",
+                    f"pixel-crop-right={right}",
+                ]
+            )
+
         print(f"Applying metadata to {mkv_path} via mkvpropedit...")
         subprocess.run(cmd, check=True)
-        print(" Successfully wrote chapters and tags to MKV container.")
+        print(" Successfully wrote native chapters, tags, and video crop fields.")

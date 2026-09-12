@@ -4,7 +4,7 @@ from models import ArchiveData, Clip, Subchapter
 
 
 def format_ffprobe_timestamp(seconds_str: str) -> str:
-    """Converts ffprobe time in seconds (e.g. '5772.666000') to HH:MM:SS.mmm format."""
+    """Converts ffprobe time in seconds to HH:MM:SS.mmm format."""
     try:
         total_seconds = float(seconds_str)
     except (ValueError, TypeError):
@@ -18,7 +18,7 @@ def format_ffprobe_timestamp(seconds_str: str) -> str:
 
 
 def read_mkv_metadata(mkv_path: str) -> ArchiveData:
-    """Reads chapters and global tags from an MKV file via ffprobe and reconstructs ArchiveData."""
+    """Reads chapters, clip dates, and native video track crop fields from an MKV file via ffprobe."""
     cmd = [
         "ffprobe",
         "-v",
@@ -26,16 +26,25 @@ def read_mkv_metadata(mkv_path: str) -> ArchiveData:
         "-print_format",
         "json",
         "-show_chapters",
-        "-show_format",
+        "-show_streams",
         mkv_path,
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     probe_data = json.loads(result.stdout)
 
-    format_info = probe_data.get("format", {})
-    global_tags = format_info.get("tags", {})
-    global_crop = global_tags.get("CROPPING", "")
+    # Reconstruct native crop string from video stream properties
+    global_crop = ""
+    for stream in probe_data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            top = stream.get("crop_top", 0)
+            bottom = stream.get("crop_bottom", 0)
+            left = stream.get("crop_left", 0)
+            right = stream.get("crop_right", 0)
+
+            if any([top, bottom, left, right]):
+                global_crop = f"{top}|{bottom}|{left}|{right}"
+            break
 
     raw_chapters = probe_data.get("chapters", [])
     clips = []
@@ -62,6 +71,6 @@ def read_mkv_metadata(mkv_path: str) -> ArchiveData:
 
     return ArchiveData(
         global_crop=global_crop,
-        raw_spec="",  # Single source of truth: no embedded raw text stored
+        raw_spec="",
         clips=clips,
     )

@@ -1,67 +1,60 @@
-import json
-import subprocess
-from models import ArchiveData, Clip, Subchapter
+import sys
+from pathlib import Path
+
+from mkv_writer import generate_mkv_chapters_and_tags
+from spec_reader import read_tape_spec
+from spec_writer import write_tape_spec
 
 
-def format_ffprobe_timestamp(seconds_str: str) -> str:
-    """Converts ffprobe time in seconds (e.g. '5772.666000') to HH:MM:SS.mmm format."""
+def run_mkv_test(file_path: str):
+    path = Path(file_path)
+    print("=" * 65)
+    print(f" TESTING MKV METADATA GENERATION: {path.name}")
+    print("=" * 65)
+
+    if not path.is_file():
+        print(f" Error: Spec file not found at '{path}'\n")
+        return
+
     try:
-        total_seconds = float(seconds_str)
-    except (ValueError, TypeError):
-        return "00:00:00.000"
+        # 1. Parse text spec into ArchiveData
+        original_text = path.read_text(encoding="utf-8")
+        parsed_data = read_tape_spec(original_text)
 
-    hours = int(total_seconds // 3600)
-    minutes = int((total_seconds % 3600) // 60)
-    seconds = total_seconds % 60
+        # 2. Print any parser warnings
+        parsed_data.print_warnings()
 
-    return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
+        print(f"[SPEC READ] Global Crop: {parsed_data.global_crop!r}")
+        print(f"[SPEC READ] Total Clips: {len(parsed_data.clips)}\n")
+
+        # 3. Generate Matroska XMLs (Chapters & Tags)
+        chapters_xml, tags_xml = generate_mkv_chapters_and_tags(parsed_data)
+
+        print("~" * 20 + " GENERATED CHAPTERS XML " + "~" * 20)
+        print(chapters_xml.rstrip())
+        print("~" * 64 + "\n")
+
+        print("~" * 22 + " GENERATED TAGS XML " + "~" * 22)
+        print(tags_xml.rstrip())
+        print("~" * 64 + "\n")
+
+        # 4. Serialize back to text spec
+        recreated_spec_text = write_tape_spec(parsed_data)
+
+        print("~" * 18 + " RECONSTRUCTED TEXT SPEC " + "~" * 18)
+        print(recreated_spec_text.rstrip())
+        print("~" * 61 + "\n")
+
+        print(" [PASSED] MKV XML generation completed successfully.\n")
+
+    except Exception as e:
+        print(f" Test Failed with exception: {e}\n")
 
 
-def read_mkv_metadata(mkv_path: str) -> ArchiveData:
-    """Reads chapters and global tags from an MKV file via ffprobe and reconstructs ArchiveData."""
-    cmd = [
-        "ffprobe",
-        "-v",
-        "quiet",
-        "-print_format",
-        "json",
-        "-show_chapters",
-        "-show_format",
-        mkv_path,
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    probe_data = json.loads(result.stdout)
-
-    format_info = probe_data.get("format", {})
-    global_tags = format_info.get("tags", {})
-    global_crop = global_tags.get("CROPPING", "")
-
-    raw_chapters = probe_data.get("chapters", [])
-    clips = []
-
-    for idx, chap in enumerate(raw_chapters, start=1):
-        chap_tags = chap.get("tags", {})
-        title = chap_tags.get("title", f"Clip {idx}")
-        date = chap_tags.get("DATE_RECORDED", "")
-
-        start_time = format_ffprobe_timestamp(chap.get("start_time", "0"))
-        end_time = format_ffprobe_timestamp(chap.get("end_time", "0"))
-
-        clip_idx = f"{idx:02d}"
-
-        clip = Clip(
-            idx=clip_idx,
-            start=start_time,
-            end=end_time,
-            title=title,
-            date=date,
-            crop=global_crop,
-        )
-        clips.append(clip)
-
-    return ArchiveData(
-        global_crop=global_crop,
-        raw_spec="",  # Single source of truth: no embedded raw text stored
-        clips=clips,
-    )
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        for arg in sys.argv[1:]:
+            run_mkv_test(arg)
+    else:
+        print("Usage: python test_mkv.py <path_to_spec.txt>")
+        print("Example: python test_mkv.py ../specs/tape1.txt")

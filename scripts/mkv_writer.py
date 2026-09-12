@@ -65,16 +65,22 @@ def generate_mkv_chapters_and_tags(data: ArchiveData):
         ET.SubElement(display, "ChapterString").text = clip.title
         ET.SubElement(display, "ChapterLanguage").text = "eng"
 
-        # Clip Date Tag targeted to parent ChapterUID (TargetTypeValue 30 = CHAPTER)
-        if clip.date:
+        # Write Clip Tags (Date & Specific Crop if different from global)
+        if clip.date or (clip.crop and clip.crop != data.global_crop):
             c_tag = ET.SubElement(tags_root, "Tag")
             c_targets = ET.SubElement(c_tag, "Targets")
             ET.SubElement(c_targets, "TargetTypeValue").text = "30"
             ET.SubElement(c_targets, "ChapterUID").text = clip_uid
 
-            simple = ET.SubElement(c_tag, "Simple")
-            ET.SubElement(simple, "name").text = "DATE_RECORDED"
-            ET.SubElement(simple, "string").text = clip.date
+            if clip.date:
+                simple_date = ET.SubElement(c_tag, "Simple")
+                ET.SubElement(simple_date, "name").text = "DATE_RECORDED"
+                ET.SubElement(simple_date, "string").text = clip.date
+
+            if clip.crop and clip.crop != data.global_crop:
+                simple_crop = ET.SubElement(c_tag, "Simple")
+                ET.SubElement(simple_crop, "name").text = "CROPPING"
+                ET.SubElement(simple_crop, "string").text = clip.crop
 
         # Nested Child Subchapters
         for sub in clip.subchapters:

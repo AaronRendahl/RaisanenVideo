@@ -18,7 +18,7 @@ def format_ffprobe_timestamp(seconds_str: str) -> str:
 
 
 def read_mkv_metadata(mkv_path: str) -> ArchiveData:
-    """Reads chapters, clip dates, and native video track crop fields from an MKV file via ffprobe."""
+    """Reads chapters, clip dates, crop overrides, and native track cropping from an MKV file."""
     cmd = [
         "ffprobe",
         "-v",
@@ -33,7 +33,7 @@ def read_mkv_metadata(mkv_path: str) -> ArchiveData:
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     probe_data = json.loads(result.stdout)
 
-    # Reconstruct native crop string from video stream properties
+    # 1. Read Native Video Track Header Cropping
     global_crop = ""
     for stream in probe_data.get("streams", []):
         if stream.get("codec_type") == "video":
@@ -46,6 +46,7 @@ def read_mkv_metadata(mkv_path: str) -> ArchiveData:
                 global_crop = f"{top}|{bottom}|{left}|{right}"
             break
 
+    # 2. Extract Chapters & Target Tags
     raw_chapters = probe_data.get("chapters", [])
     clips = []
 
@@ -53,6 +54,9 @@ def read_mkv_metadata(mkv_path: str) -> ArchiveData:
         chap_tags = chap.get("tags", {})
         title = chap_tags.get("title", f"Clip {idx}")
         date = chap_tags.get("DATE_RECORDED", "")
+
+        # Use chapter-level crop override if present; otherwise fall back to global track crop
+        clip_crop = chap_tags.get("CROPPING", global_crop)
 
         start_time = format_ffprobe_timestamp(chap.get("start_time", "0"))
         end_time = format_ffprobe_timestamp(chap.get("end_time", "0"))
@@ -65,12 +69,12 @@ def read_mkv_metadata(mkv_path: str) -> ArchiveData:
             end=end_time,
             title=title,
             date=date,
-            crop=global_crop,
+            crop=clip_crop,
         )
         clips.append(clip)
 
     return ArchiveData(
         global_crop=global_crop,
-        raw_spec="",
+        raw_spec="",  # Native Matroska chapters/tags are single source of truth
         clips=clips,
     )

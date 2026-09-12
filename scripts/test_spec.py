@@ -63,6 +63,19 @@ def run_spec_tests(file_paths):
             else:
                 print(" [FAILED] Data mismatch after round-trip conversion!")
 
+            # -------------------------------------------------------------
+            # STEP 4: Print Warnings at the Bottom of Output
+            # -------------------------------------------------------------
+            if parsed_data.warnings:
+                print("\n--- Parsed Spec Warnings ---")
+                parsed_data.print_warnings()
+
+            # Note: Round-trip warnings will usually be empty because write_tape_spec
+            # strips invalid subchapter dates/crops during serialization.
+            if roundtrip_data.warnings:
+                print("\n--- Recreated Spec Warnings ---")
+                roundtrip_data.print_warnings()
+
             print("\n")
 
         except Exception as e:

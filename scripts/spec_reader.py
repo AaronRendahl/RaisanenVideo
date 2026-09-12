@@ -4,6 +4,7 @@ from models import ArchiveData, Clip, Subchapter
 def read_tape_spec(text_content: str) -> ArchiveData:
     global_crop = ""
     clips = []
+    warnings = []
 
     current_clip = None
     is_uncut_mode = False
@@ -30,6 +31,21 @@ def read_tape_spec(text_content: str) -> ArchiveData:
         date = parts[4] if len(parts) > 4 else ""
         crop = parts[5] if len(parts) > 5 else ""
 
+        # Warning helper for subchapters
+        def check_subchapter_warnings(
+            sub_idx: str, sub_date: str, sub_crop: str
+        ):
+            ignored_fields = []
+            if sub_date:
+                ignored_fields.append(f"Date '{sub_date}'")
+            if sub_crop:
+                ignored_fields.append(f"Crop '{sub_crop}'")
+            if ignored_fields:
+                fields_str = " and ".join(ignored_fields)
+                warnings.append(
+                    f"Line {line_num} (Subchapter {sub_idx}): {fields_str} ignored (Date/Crop only apply to whole clips)."
+                )
+
         # 3. Detect Uncut Master Tape Header (Blank IDX)
         if idx == "" and not current_clip and not is_uncut_mode:
             is_uncut_mode = True
@@ -44,35 +60,22 @@ def read_tape_spec(text_content: str) -> ArchiveData:
             clips.append(current_clip)
             continue
 
-        # Helper to validate unexpected date/crop on subchapter rows
-        def check_subchapter_warnings(sub_idx: str):
-            ignored_fields = []
-            if date:
-                ignored_fields.append(f"Date '{date}'")
-            if crop:
-                ignored_fields.append(f"Crop '{crop}'")
-            if ignored_fields:
-                fields_str = " and ".join(ignored_fields)
-                print(
-                    f"  ⚠️  [WARNING] Line {line_num} (Subchapter {sub_idx}): {fields_str} ignored (Date/Crop only apply to whole clips)."
-                )
-
-        # 4. Uncut Mode Subchapters
+        # 4. Handle Subchapters for Uncut Master Tape
         if is_uncut_mode:
-            check_subchapter_warnings(idx)
+            check_subchapter_warnings(idx, date, crop)
             sub = Subchapter(idx=idx, start=start, end=end, title=title)
             current_clip.subchapters.append(sub)
             continue
 
-        # 5. Cut-Tape Mode Subchapters vs Clips
+        # 5. Handle Cut-Tape Mode Subchapters vs Clips
         if "." in idx:
-            check_subchapter_warnings(idx)
+            check_subchapter_warnings(idx, date, crop)
             sub = Subchapter(idx=idx, start=start, end=end, title=title)
             if current_clip:
                 current_clip.subchapters.append(sub)
             else:
-                print(
-                    f"  ⚠️  [WARNING] Line {line_num}: Subchapter {idx} found before any parent clip was defined."
+                warnings.append(
+                    f"Line {line_num}: Subchapter {idx} found before any parent clip was defined."
                 )
         else:
             current_clip = Clip(
@@ -106,5 +109,8 @@ def read_tape_spec(text_content: str) -> ArchiveData:
             clip.end = clip.subchapters[-1].end
 
     return ArchiveData(
-        global_crop=global_crop, raw_spec=text_content.strip(), clips=clips
+        global_crop=global_crop,
+        raw_spec=text_content.strip(),
+        clips=clips,
+        warnings=warnings,
     )

@@ -10,7 +10,7 @@ def read_tape_spec(text_content: str) -> ArchiveData:
 
     lines = text_content.splitlines()
 
-    for line in lines:
+    for line_num, line in enumerate(lines, start=1):
         stripped = line.strip()
 
         # 1. Directives & Comments
@@ -44,17 +44,36 @@ def read_tape_spec(text_content: str) -> ArchiveData:
             clips.append(current_clip)
             continue
 
+        # Helper to validate unexpected date/crop on subchapter rows
+        def check_subchapter_warnings(sub_idx: str):
+            ignored_fields = []
+            if date:
+                ignored_fields.append(f"Date '{date}'")
+            if crop:
+                ignored_fields.append(f"Crop '{crop}'")
+            if ignored_fields:
+                fields_str = " and ".join(ignored_fields)
+                print(
+                    f"  ⚠️  [WARNING] Line {line_num} (Subchapter {sub_idx}): {fields_str} ignored (Date/Crop only apply to whole clips)."
+                )
+
         # 4. Uncut Mode Subchapters
         if is_uncut_mode:
+            check_subchapter_warnings(idx)
             sub = Subchapter(idx=idx, start=start, end=end, title=title)
             current_clip.subchapters.append(sub)
             continue
 
-        # 5. Cut-Tape Mode
+        # 5. Cut-Tape Mode Subchapters vs Clips
         if "." in idx:
+            check_subchapter_warnings(idx)
             sub = Subchapter(idx=idx, start=start, end=end, title=title)
             if current_clip:
                 current_clip.subchapters.append(sub)
+            else:
+                print(
+                    f"  ⚠️  [WARNING] Line {line_num}: Subchapter {idx} found before any parent clip was defined."
+                )
         else:
             current_clip = Clip(
                 idx=idx,
@@ -78,12 +97,10 @@ def read_tape_spec(text_content: str) -> ArchiveData:
         if not chronological_sequence[i].end:
             chronological_sequence[i].end = chronological_sequence[i + 1].start
 
-    # Post-Processing: Subchapter boundary syncing & Global crop fallbacks
+    # Post-Processing: Sync parent clip boundaries & apply global crop fallback
     for clip in clips:
-        # Fall back to global crop if no custom crop was defined for this clip
         clip.crop = clip.crop if clip.crop else global_crop
 
-        # Sync parent clip boundaries if subchapters exist
         if clip.subchapters:
             clip.start = clip.subchapters[0].start
             clip.end = clip.subchapters[-1].end

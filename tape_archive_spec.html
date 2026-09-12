@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tape Archiving Text Format & Metadata Specification</title>
+<style>
+  :root {
+    --bg-color: #0f172a;
+    --card-bg: #1e293b;
+    --text-color: #f8fafc;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-glow: rgba(56, 189, 248, 0.15);
+    --border-color: #334155;
+    --code-bg: #090d16;
+    --sidebar-width: 260px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    line-height: 1.6;
+    margin: 0;
+    display: flex;
+  }
+  sidebar {
+    width: var(--sidebar-width);
+    background-color: #0b1120;
+    border-right: 1px solid var(--border-color);
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    padding: 2rem 1.25rem;
+    overflow-y: auto;
+  }
+  sidebar h3 {
+    color: var(--accent);
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0;
+    margin-bottom: 1.25rem;
+  }
+  sidebar nav a {
+    display: block;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    margin-bottom: 0.25rem;
+    transition: all 0.2s ease;
+  }
+  sidebar nav a:hover {
+    background-color: var(--card-bg);
+    color: var(--text-color);
+  }
+  .main-wrapper {
+    margin-left: var(--sidebar-width);
+    flex: 1;
+    padding: 2.5rem;
+    max-width: 980px;
+  }
+  header {
+    margin-bottom: 2.5rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 1.5rem;
+  }
+  h1 {
+    font-size: 2.25rem;
+    color: var(--accent);
+    margin: 0 0 0.5rem 0;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 1.1rem;
+  }
+  section {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1.75rem 2rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  }
+  h2 {
+    color: var(--accent);
+    font-size: 1.4rem;
+    margin-top: 0;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.5rem;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+  }
+  th {
+    background-color: rgba(255, 255, 255, 0.03);
+    color: var(--accent);
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background-color: var(--code-bg);
+    color: #e2e8f0;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  pre {
+    background-color: var(--code-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1rem;
+    overflow-x: auto;
+  }
+  pre code {
+    background: transparent;
+    padding: 0;
+  }
+  ul, ol {
+    padding-left: 1.25rem;
+  }
+  li {
+    margin-bottom: 0.5rem;
+  }
+</style>
+</head>
+<body>
+
+<sidebar>
+  <h3>Navigation</h3>
+  <nav>
+    <a href="#section-1">1. Column Layout</a>
+    <a href="#section-2">2. Formatting & Rules</a>
+    <a href="#section-3">3. Format Examples</a>
+    <a href="#section-4">4. Parser State Logic</a>
+  </nav>
+</sidebar>
+
+<div class="main-wrapper">
+  <header>
+    <h1>Tape Archiving Specification</h1>
+    <div class="subtitle">Unified Text Format &amp; Metadata Schema for <code>process_tape.sh</code></div>
+  </header>
+
+  <section id="section-1">
+    <h2>1. Column Layout</h2>
+    <p>Every non-comment line consists of <strong>6 pipe-delimited (<code>|</code>) columns</strong>:</p>
+    <pre><code>IDX | START | END | TITLE / CHAPTER | DATE | CROPS</code></pre>
+    <table>
+      <thead>
+        <tr>
+          <th>Col</th>
+          <th>Name</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td><code>IDX</code></td>
+          <td>Numeric identifier. Integer (<code>06</code>) = Output video clip. Decimal (<code>06.1</code>) = Subchapter. Blank (<code>&nbsp;</code>) = Uncut Master Tape.</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td><code>START</code></td>
+          <td>Start timestamp (<code>HH:MM:SS.mmm</code>).</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td><code>END</code></td>
+          <td>End timestamp (<code>HH:MM:SS.mmm</code>). Optional if continuous.</td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td><code>TITLE / CHAPTER</code></td>
+          <td>Output clip title (on integer/blank rows) or subchapter title.</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td><code>DATE</code></td>
+          <td>ISO date (<code>YYYY-MM-DD</code> or <code>YYYY</code>). Optional trailing field.</td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td><code>CROPS</code></td>
+          <td>Crop boundary <code>L|R|T|B</code> (e.g., <code>12|24|0|8</code>). Optional trailing field.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="section-2">
+    <h2>2. Formatting &amp; Parsing Rules</h2>
+    <ul>
+      <li><strong>Whitespace Tolerance:</strong> Leading/trailing whitespace around pipes is automatically stripped by the parser. Spaced or padded columns are fully valid.</li>
+      <li><strong>Optional Trailing Pipes:</strong> Unspecified <code>DATE</code> and <code>CROPS</code> fields can leave off trailing pipes entirely.</li>
+      <li><strong>Auto-Chaining:</strong> Continuous subchapters only require a <code>START</code> timestamp. The <code>END</code> time is inferred from the subsequent row's <code>START</code>. The last subchapter requires an explicit <code>END</code> time.</li>
+      <li><strong>Blank <code>IDX</code> Master Tape Shortcut:</strong> Leaving <code>IDX</code> blank on line 1 sets <code>UNCUT_MODE=true</code>. Following rows numbered as whole integers (<code>1</code>, <code>2</code>, <code>3</code>) automatically parse as subchapters of the single master video.</li>
+    </ul>
+  </section>
+
+  <section id="section-3">
+    <h2>3. Format Examples</h2>
+    
+    <h3>Example A: Uncut Master Tape (Blank <code>IDX</code> Shortcut)</h3>
+    <pre><code>## Crop: 12|24|0|8
+
+| | | Willy’s 40th Birthday Party | 1987-09-19 | 12|24|0|8
+1 | 00:00:01.168 |              | arrival
+2 | 00:02:12.366 |              | kids dance
+3 | 00:04:41.548 | 00:22:24.009 | social time and presents</code></pre>
+
+    <h3>Example B: Cut Tape with Continuous Subchapters</h3>
+    <pre><code>06 | | | At the Lake | 1987-05-24
+06.01 | 00:30:41.317 |              | baseball
+06.02 | 00:35:49.282 |              | grilling
+06.03 | 00:37:11.813 | 00:37:35.528 | exterior</code></pre>
+
+    <h3>Example C: Standalone Clips (Single &amp; Multi-Chapter)</h3>
+    <pre><code>07 | 01:01:51.952 | 01:11:14.813 | birthday party
+08 | 01:11:17.271 | 01:17:47.261 | dance in driveway
+09 | 01:17:55.467 | 01:24:05.791 | karate presentation | 1987-06-08</code></pre>
+  </section>
+
+  <section id="section-4">
+    <h2>4. Parser State Logic Reference</h2>
+    <p>When parsing each line sequentially in <code>process_tape.sh</code>:</p>
+    <ol>
+      <li><strong>Header Directive Check:</strong>
+        <br>Lines starting with <code>##</code> configure script-wide defaults (e.g., <code>## Crop: 12|24|0|8</code>). Comments starting with <code>#</code> or empty lines are ignored.
+      </li>
+      <li><strong>Blank <code>IDX</code> Line Encountered (Uncut Master Tape):</strong>
+        <br>Sets <code>UNCUT_MODE=true</code>. Stores the primary master title, date, and crops. Sets parent clip <code>START</code> to <code>00:00:00.000</code> (or earliest subchapter timestamp).
+      </li>
+      <li><strong>Integer <code>IDX</code> Line Encountered (e.g., <code>06</code>):</strong>
+        <br>Finalizes and writes out any previously buffered video clip. Initializes a new parent clip structure storing <code>title</code>, <code>date</code>, and <code>crop</code> settings.
+      </li>
+      <li><strong>Decimal <code>IDX</code> or Subchapter Integer Line Encountered (e.g., <code>06.02</code> or <code>2</code> under Uncut Mode):</strong>
+        <br>If the preceding subchapter has an empty <code>END</code> field, assigns <code>prev.END = curr.START</code>. Calculates relative offset (<code>Subchapter START - Parent Clip START</code>) and appends to the FFMETADATA buffer.
+      </li>
+      <li><strong>End of File / Boundary Finalization:</strong>
+        <br>Sets <code>Parent START = min(subchapters)</code> and <code>Parent END = max(subchapters)</code>. Triggers a two-stage FFmpeg process to re-encode video segments and write embedded Matroska XML/FFMETADATA chapter structures.
+      </li>
+    </ol>
+  </section>
+</div>
+
+</body>
+</html>

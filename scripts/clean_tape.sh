@@ -1,21 +1,13 @@
 #!/usr/bin/env zsh
 
-# Step 1. Use this script to convert a clean copy
-# Step 2. Open with LosslessCut. Convert to supported format if asked.
-# Step 3. Find frames to start and end on, and put into tapename.txt
-# Step 4. Run process_tape.sh
-# Default flag values
-
 OPT_8MM=false
-TAPE_DATE=""
 
 # Parse options
-while getopts "8d:" opt; do
+while getopts "8" opt; do
   case "$opt" in
     8) OPT_8MM=true ;;
-    d) TAPE_DATE="$OPTARG" ;;
     ?)
-       echo "Usage: $0 [-8] [-d YYYY-MM-DD] <TAPE_NAME_WITHOUT_EXTENSION> [TITLE]"
+       echo "Usage: $0 [-8] <TAPE_NAME_WITHOUT_EXTENSION>"
        exit 1
        ;;
   esac
@@ -25,12 +17,11 @@ shift $((OPTIND - 1))
 
 if [[ -z "$1" ]]; then
   echo "Error: No input file specified!"
-  echo "Usage: $0 [-8] [-d YYYY-MM-DD] <TAPE_NAME_WITHOUT_EXTENSION> [TITLE]"
+  echo "Usage: $0 [-8] <TAPE_NAME_WITHOUT_EXTENSION>"
   exit 1
 fi
 
 VIDIN="$1"
-TAPE_TITLE="$2"
 INPUT_FILE="${VIDIN}.mpg"
 OUTPUT_FILE="${VIDIN}.mkv"
 
@@ -46,19 +37,6 @@ else
   AUDIO_ARG="-c:a copy"
 fi
 
-# Build Metadata Array
-METADATA_ARGS=()
-
-if [[ -n "$TAPE_TITLE" ]]; then
-  echo ">>> Embedding Title Metadata: \"$TAPE_TITLE\" <<<"
-  METADATA_ARGS+=(-metadata "title=$TAPE_TITLE")
-fi
-
-if [[ -n "$TAPE_DATE" ]]; then
-  echo ">>> Embedding Date Metadata: \"$TAPE_DATE\" <<<"
-  METADATA_ARGS+=(-metadata "date=$TAPE_DATE" -metadata "creation_time=$TAPE_DATE")
-fi
-
 echo "Cleaning tape '$INPUT_FILE' -> '$OUTPUT_FILE'..."
 
 ffmpeg -hide_banner -loglevel error -y \
@@ -66,7 +44,6 @@ ffmpeg -hide_banner -loglevel error -y \
   -i "$INPUT_FILE" \
   -c:v copy \
   ${=AUDIO_ARG} \
-  "${METADATA_ARGS[@]}" \
   -max_muxing_queue_size 1024 \
   -avoid_negative_ts make_zero \
   "$OUTPUT_FILE"

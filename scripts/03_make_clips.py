@@ -228,12 +228,14 @@ def main():
                     concat_inputs = "".join(f"[v{idx}][a{idx}]" for idx in range(len(segments)))
                     filter_lines.append(f"{concat_inputs}concat=n={len(segments)}:v=1:a=1[outv][outa]")
                     
+                    meta_idx = len(segments)
                     cmd.extend([
                         "-i", meta_path,
                         "-filter_complex", "".join(filter_lines),
                         "-map", "[outv]",
                         "-map", "[outa]",
-                        "-map_metadata", f"{len(segments)}",
+                        "-map_metadata", f"{meta_idx}",
+                        "-map_chapters", f"{meta_idx}",
                         "-c:v", "libx264", "-crf", "18", "-preset", "slow",
                         "-c:a", "aac", "-b:a", "192k",
                         str(output_mp4)
@@ -250,6 +252,7 @@ def main():
                         "-i", str(mkv_path),
                         "-i", meta_path,
                         "-map_metadata", "1",
+                        "-map_chapters", "1",
                         "-vf", vf_base,
                         "-c:v", "libx264", "-crf", "18", "-preset", "slow",
                         "-c:a", "aac", "-b:a", "192k",

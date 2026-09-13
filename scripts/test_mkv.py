@@ -1,6 +1,10 @@
 import sys
 from pathlib import Path
 
+# Ensure src/ is on pythonpath
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
 from mkv_writer import generate_mkv_chapters_and_tags
 from spec_reader import read_tape_spec
 from spec_writer import write_tape_spec

@@ -159,19 +159,21 @@ def main():
                 # 'a' = uncropped
                 uncropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}a.png"
                 cmd_uncropped = [
-                    "ffmpeg", "-y", "-ss", str(t_sec), "-i", str(mkv_path),
+                    "ffmpeg", "-y", "-loglevel", "warning",
+                    "-ss", str(t_sec), "-i", str(mkv_path),
                     "-vframes", "1", str(uncropped_out)
                 ]
-                subprocess.run(cmd_uncropped, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(cmd_uncropped, check=True)
 
                 # 'b' = cropped
                 if ffmpeg_crop:
                     cropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}b.png"
                     cmd_cropped = [
-                        "ffmpeg", "-y", "-ss", str(t_sec), "-i", str(mkv_path),
+                        "ffmpeg", "-y", "-loglevel", "warning",
+                        "-ss", str(t_sec), "-i", str(mkv_path),
                         "-vf", ffmpeg_crop, "-vframes", "1", str(cropped_out)
                     ]
-                    subprocess.run(cmd_cropped, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(cmd_cropped, check=True)
 
             print(f"[{clip.idx}] Captured diagnostic frames (1a/1b, 2a/2b, 3a/3b) for: {clip.title}")
             continue
@@ -195,6 +197,7 @@ def main():
         try:
             cmd = [
                 "ffmpeg", "-y",
+                "-loglevel", "warning",
                 "-ss", str(start_sec),
                 "-to", str(end_sec),
                 "-i", str(mkv_path),

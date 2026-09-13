@@ -4,7 +4,8 @@
 
 CLI entrypoint to generate derivative MP4 clips (1 continuous file per top-level Clip)
 with embedded MP4 chapter markers for subchapters, plus diagnostic frame snapshots.
-Splices out all gaps (down to frame-level artifacts) between subchapters.
+Splices out all gaps (down to frame-level artifacts) between subchapters and logs
+FFmpeg output to 02_clips/<TAPE_NAME>/ffmpeg_encode.log.
 """
 
 import sys
@@ -80,7 +81,6 @@ def resolve_subsegments(clip, total_duration_sec: float):
 def has_gaps(segments) -> bool:
     """
     Check if there are gaps between segments (threshold = 0.001s / 1ms).
-    Splices out even single-frame artifacts or tiny pauses between subchapters.
     """
     if len(segments) <= 1:
         return False
@@ -151,113 +151,116 @@ def main():
 
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
     tape_clips_dir = CLIPS_DIR / tape_name
-    if frames_only:
-        tape_clips_dir.mkdir(exist_ok=True)
+    tape_clips_dir.mkdir(exist_ok=True)
+
+    log_file_path = tape_clips_dir / "ffmpeg_encode.log"
 
     print(f"{'Generating diagnostic frames' if frames_only else 'Encoding clip MP4s'} for: {tape_name}")
+    print(f"Logging FFmpeg output to: {log_file_path}")
 
-    for clip in data.clips:
-        segments = resolve_subsegments(clip, total_duration_sec)
-        
-        safe_title = "".join(c if c.isalnum() or c in (" ", "-", "_") else "" for c in clip.title).strip().replace(" ", "_")
-        clip_prefix = f"{tape_name}_{clip.idx}_{safe_title}"
-
-        # Crop Geometry (Left Right Top Bottom)
-        crop_val = clip.crop if clip.crop else data.global_crop
-        ffmpeg_crop = build_crop_filter(crop_val)
-
-        if frames_only:
-            first_sec = segments[0][0]
-            mid_seg = segments[len(segments) // 2]
-            mid_sec = mid_seg[0] + ((mid_seg[1] - mid_seg[0]) / 2.0)
-            last_sec = max(segments[-1][0], segments[-1][1] - 0.1)
-
-            timestamps = [("1", first_sec), ("2", mid_sec), ("3", last_sec)]
+    with open(log_file_path, "a", encoding="utf-8") as log_file:
+        for clip in data.clips:
+            segments = resolve_subsegments(clip, total_duration_sec)
             
-            for num_code, t_sec in timestamps:
-                uncropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}a.png"
-                cmd_uncropped = [
-                    "ffmpeg", "-y", "-loglevel", "warning",
-                    "-ss", str(t_sec), "-i", str(mkv_path),
-                    "-vframes", "1", str(uncropped_out)
-                ]
-                subprocess.run(cmd_uncropped, check=True)
+            safe_title = "".join(c if c.isalnum() or c in (" ", "-", "_") else "" for c in clip.title).strip().replace(" ", "_")
+            clip_prefix = f"{tape_name}_{clip.idx}_{safe_title}"
 
-                if ffmpeg_crop:
-                    cropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}b.png"
-                    cmd_cropped = [
+            # Crop Geometry (Left Right Top Bottom)
+            crop_val = clip.crop if clip.crop else data.global_crop
+            ffmpeg_crop = build_crop_filter(crop_val)
+
+            if frames_only:
+                first_sec = segments[0][0]
+                mid_seg = segments[len(segments) // 2]
+                mid_sec = mid_seg[0] + ((mid_seg[1] - mid_seg[0]) / 2.0)
+                last_sec = max(segments[-1][0], segments[-1][1] - 0.1)
+
+                timestamps = [("1", first_sec), ("2", mid_sec), ("3", last_sec)]
+                
+                for num_code, t_sec in timestamps:
+                    uncropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}a.png"
+                    cmd_uncropped = [
                         "ffmpeg", "-y", "-loglevel", "warning",
                         "-ss", str(t_sec), "-i", str(mkv_path),
-                        "-vf", ffmpeg_crop, "-vframes", "1", str(cropped_out)
+                        "-vframes", "1", str(uncropped_out)
                     ]
-                    subprocess.run(cmd_cropped, check=True)
+                    subprocess.run(cmd_uncropped, stdout=log_file, stderr=log_file, check=True)
 
-            print(f"[{clip.idx}] Captured diagnostic frames (1a/1b, 2a/2b, 3a/3b) for: {clip.title}")
-            continue
+                    if ffmpeg_crop:
+                        cropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}b.png"
+                        cmd_cropped = [
+                            "ffmpeg", "-y", "-loglevel", "warning",
+                            "-ss", str(t_sec), "-i", str(mkv_path),
+                            "-vf", ffmpeg_crop, "-vframes", "1", str(cropped_out)
+                        ]
+                        subprocess.run(cmd_cropped, stdout=log_file, stderr=log_file, check=True)
 
-        output_mp4 = CLIPS_DIR / f"{clip_prefix}.mp4"
-        is_gapped = has_gaps(segments)
+                print(f"[{clip.idx}] Captured diagnostic frames (1a/1b, 2a/2b, 3a/3b) for: {clip.title}")
+                continue
 
-        # Common video filter setup
-        vf_base = "bwdif=mode=send_field:deint=all"
-        if ffmpeg_crop:
-            vf_base += f",{ffmpeg_crop}"
+            output_mp4 = CLIPS_DIR / f"{clip_prefix}.mp4"
+            is_gapped = has_gaps(segments)
 
-        # Build metadata file
-        ffmeta_content = generate_concat_ffmetadata(clip, segments)
-        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as meta_file:
-            meta_file.write(ffmeta_content)
-            meta_path = meta_file.name
+            # Common video filter setup
+            vf_base = "bwdif=mode=send_field:deint=all"
+            if ffmpeg_crop:
+                vf_base += f",{ffmpeg_crop}"
 
-        try:
-            if is_gapped or len(segments) > 1:
-                # Multi-segment concat engine: precision removal of any gaps/artifacts
-                print(f"Encoding clip [{clip.idx}]: {clip.title} ({len(segments)} segments concatenated, artifacts/gaps spliced)...")
-                cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
-                
-                for s_sec, e_sec, _ in segments:
-                    cmd.extend(["-ss", str(s_sec), "-to", str(e_sec), "-i", str(mkv_path)])
+            # Build metadata file
+            ffmeta_content = generate_concat_ffmetadata(clip, segments)
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as meta_file:
+                meta_file.write(ffmeta_content)
+                meta_path = meta_file.name
 
-                filter_lines = []
-                for idx in range(len(segments)):
-                    filter_lines.append(f"[{idx}:v]{vf_base}[v{idx}];")
-                    filter_lines.append(f"[{idx}:a]anull[a{idx}];")
-                
-                concat_inputs = "".join(f"[v{idx}][a{idx}]" for idx in range(len(segments)))
-                filter_lines.append(f"{concat_inputs}concat=n={len(segments)}:v=1:a=1[outv][outa]")
-                
-                cmd.extend([
-                    "-i", meta_path,
-                    "-filter_complex", "".join(filter_lines),
-                    "-map", "[outv]",
-                    "-map", "[outa]",
-                    "-map_metadata", f"{len(segments)}",
-                    "-c:v", "libx264", "-crf", "18", "-preset", "slow",
-                    "-c:a", "aac", "-b:a", "192k",
-                    str(output_mp4)
-                ])
-            else:
-                # Single-pass engine for single continuous clip without subchapters
-                clip_start = segments[0][0]
-                clip_end = segments[-1][1]
-                print(f"Encoding clip [{clip.idx}]: {clip.title} (single-pass encode)...")
-                
-                cmd = [
-                    "ffmpeg", "-y", "-loglevel", "warning",
-                    "-ss", str(clip_start),
-                    "-to", str(clip_end),
-                    "-i", str(mkv_path),
-                    "-i", meta_path,
-                    "-map_metadata", "1",
-                    "-vf", vf_base,
-                    "-c:v", "libx264", "-crf", "18", "-preset", "slow",
-                    "-c:a", "aac", "-b:a", "192k",
-                    str(output_mp4)
-                ]
+            try:
+                if is_gapped or len(segments) > 1:
+                    print(f"Encoding clip [{clip.idx}]: {clip.title} ({len(segments)} segments concatenated, artifacts/gaps spliced)...")
+                    cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
+                    
+                    for s_sec, e_sec, _ in segments:
+                        cmd.extend(["-ss", str(s_sec), "-to", str(e_sec), "-i", str(mkv_path)])
 
-            subprocess.run(cmd, check=True)
-        finally:
-            Path(meta_path).unlink(missing_ok=True)
+                    filter_lines = []
+                    for idx in range(len(segments)):
+                        filter_lines.append(f"[{idx}:v]{vf_base}[v{idx}];")
+                        filter_lines.append(f"[{idx}:a]anull[a{idx}];")
+                    
+                    concat_inputs = "".join(f"[v{idx}][a{idx}]" for idx in range(len(segments)))
+                    filter_lines.append(f"{concat_inputs}concat=n={len(segments)}:v=1:a=1[outv][outa]")
+                    
+                    cmd.extend([
+                        "-i", meta_path,
+                        "-filter_complex", "".join(filter_lines),
+                        "-map", "[outv]",
+                        "-map", "[outa]",
+                        "-map_metadata", f"{len(segments)}",
+                        "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                        "-c:a", "aac", "-b:a", "192k",
+                        str(output_mp4)
+                    ])
+                else:
+                    clip_start = segments[0][0]
+                    clip_end = segments[-1][1]
+                    print(f"Encoding clip [{clip.idx}]: {clip.title} (single-pass encode)...")
+                    
+                    cmd = [
+                        "ffmpeg", "-y", "-loglevel", "warning",
+                        "-ss", str(clip_start),
+                        "-to", str(clip_end),
+                        "-i", str(mkv_path),
+                        "-i", meta_path,
+                        "-map_metadata", "1",
+                        "-vf", vf_base,
+                        "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                        "-c:a", "aac", "-b:a", "192k",
+                        str(output_mp4)
+                    ]
+
+                log_file.write(f"\n--- Encoding Clip [{clip.idx}]: {clip.title} ---\n")
+                log_file.flush()
+                subprocess.run(cmd, stdout=log_file, stderr=log_file, check=True)
+            finally:
+                Path(meta_path).unlink(missing_ok=True)
 
     print("Done!")
 

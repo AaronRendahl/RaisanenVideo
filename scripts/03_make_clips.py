@@ -3,8 +3,8 @@
 03_make_clips.py
 
 CLI entrypoint to generate derivative MP4 clips (1 continuous file per top-level Clip)
-by concatenating active subchapters/segments, removing dead gaps, and embedding
-re-aligned MP4 chapter markers.
+with embedded MP4 chapter markers for subchapters, plus diagnostic frame snapshots.
+Splices out all gaps (down to frame-level artifacts) between subchapters.
 """
 
 import sys
@@ -75,6 +75,20 @@ def resolve_subsegments(clip, total_duration_sec: float):
         e_sec = parse_timestamp_to_seconds(clip.end) if clip.end else total_duration_sec
         segments.append((s_sec, e_sec, clip.title))
     return segments
+
+
+def has_gaps(segments) -> bool:
+    """
+    Check if there are gaps between segments (threshold = 0.001s / 1ms).
+    Splices out even single-frame artifacts or tiny pauses between subchapters.
+    """
+    if len(segments) <= 1:
+        return False
+    for i in range(len(segments) - 1):
+        gap = segments[i + 1][0] - segments[i][1]
+        if gap > 0.001:
+            return True
+    return False
 
 
 def generate_concat_ffmetadata(clip, segments) -> str:
@@ -153,7 +167,6 @@ def main():
         ffmpeg_crop = build_crop_filter(crop_val)
 
         if frames_only:
-            # Diagnostics: first frame of first segment, mid of middle segment, last of last segment
             first_sec = segments[0][0]
             mid_seg = segments[len(segments) // 2]
             mid_sec = mid_seg[0] + ((mid_seg[1] - mid_seg[0]) / 2.0)
@@ -183,48 +196,65 @@ def main():
             continue
 
         output_mp4 = CLIPS_DIR / f"{clip_prefix}.mp4"
+        is_gapped = has_gaps(segments)
 
-        # Build FFmpeg command with complex filter for segment trimming & concating
-        cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
-        
-        # Add input stream per segment
-        for s_sec, e_sec, _ in segments:
-            cmd.extend(["-ss", str(s_sec), "-to", str(e_sec), "-i", str(mkv_path)])
-
-        # Build filtergraph
+        # Common video filter setup
         vf_base = "bwdif=mode=send_field:deint=all"
         if ffmpeg_crop:
             vf_base += f",{ffmpeg_crop}"
 
-        filter_lines = []
-        for idx in range(len(segments)):
-            filter_lines.append(f"[{idx}:v]{vf_base}[v{idx}];")
-            filter_lines.append(f"[{idx}:a]anull[a{idx}];")
-        
-        concat_inputs = "".join(f"[v{idx}][a{idx}]" for idx in range(len(segments)))
-        filter_lines.append(f"{concat_inputs}concat=n={len(segments)}:v=1:a=1[outv][outa]")
-        
-        filter_complex_str = "".join(filter_lines)
-
-        # Build temporary metadata file
+        # Build metadata file
         ffmeta_content = generate_concat_ffmetadata(clip, segments)
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as meta_file:
             meta_file.write(ffmeta_content)
             meta_path = meta_file.name
 
-        cmd.extend([
-            "-i", meta_path,
-            "-filter_complex", filter_complex_str,
-            "-map", "[outv]",
-            "-map", "[outa]",
-            "-map_metadata", f"{len(segments)}",
-            "-c:v", "libx264", "-crf", "18", "-preset", "slow",
-            "-c:a", "aac", "-b:a", "192k",
-            str(output_mp4)
-        ])
-
         try:
-            print(f"Encoding clip [{clip.idx}]: {clip.title} ({len(segments)} concatenated segment(s))...")
+            if is_gapped or len(segments) > 1:
+                # Multi-segment concat engine: precision removal of any gaps/artifacts
+                print(f"Encoding clip [{clip.idx}]: {clip.title} ({len(segments)} segments concatenated, artifacts/gaps spliced)...")
+                cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
+                
+                for s_sec, e_sec, _ in segments:
+                    cmd.extend(["-ss", str(s_sec), "-to", str(e_sec), "-i", str(mkv_path)])
+
+                filter_lines = []
+                for idx in range(len(segments)):
+                    filter_lines.append(f"[{idx}:v]{vf_base}[v{idx}];")
+                    filter_lines.append(f"[{idx}:a]anull[a{idx}];")
+                
+                concat_inputs = "".join(f"[v{idx}][a{idx}]" for idx in range(len(segments)))
+                filter_lines.append(f"{concat_inputs}concat=n={len(segments)}:v=1:a=1[outv][outa]")
+                
+                cmd.extend([
+                    "-i", meta_path,
+                    "-filter_complex", "".join(filter_lines),
+                    "-map", "[outv]",
+                    "-map", "[outa]",
+                    "-map_metadata", f"{len(segments)}",
+                    "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                    "-c:a", "aac", "-b:a", "192k",
+                    str(output_mp4)
+                ])
+            else:
+                # Single-pass engine for single continuous clip without subchapters
+                clip_start = segments[0][0]
+                clip_end = segments[-1][1]
+                print(f"Encoding clip [{clip.idx}]: {clip.title} (single-pass encode)...")
+                
+                cmd = [
+                    "ffmpeg", "-y", "-loglevel", "warning",
+                    "-ss", str(clip_start),
+                    "-to", str(clip_end),
+                    "-i", str(mkv_path),
+                    "-i", meta_path,
+                    "-map_metadata", "1",
+                    "-vf", vf_base,
+                    "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                    "-c:a", "aac", "-b:a", "192k",
+                    str(output_mp4)
+                ]
+
             subprocess.run(cmd, check=True)
         finally:
             Path(meta_path).unlink(missing_ok=True)

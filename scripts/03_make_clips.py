@@ -5,7 +5,8 @@
 CLI entrypoint to generate derivative MP4 clips (1 continuous file per top-level Clip)
 with embedded MP4 chapter markers for subchapters, plus diagnostic frame snapshots.
 Splices out all gaps (down to frame-level artifacts) between subchapters and logs
-FFmpeg output to 02_clips/<TAPE_NAME>/ffmpeg_encode.log.
+FFmpeg output to 02_clips/<TAPE_NAME>/ffmpeg_encode.log. Includes +faststart for
+optimized web/preview playback.
 """
 
 import sys
@@ -236,6 +237,7 @@ def main():
                         "-map", "[outa]",
                         "-map_metadata", f"{meta_idx}",
                         "-map_chapters", f"{meta_idx}",
+                        "-movflags", "+faststart",
                         "-c:v", "libx264", "-crf", "18", "-preset", "slow",
                         "-c:a", "aac", "-b:a", "192k",
                         str(output_mp4)
@@ -253,6 +255,7 @@ def main():
                         "-i", meta_path,
                         "-map_metadata", "1",
                         "-map_chapters", "1",
+                        "-movflags", "+faststart",
                         "-vf", vf_base,
                         "-c:v", "libx264", "-crf", "18", "-preset", "slow",
                         "-c:a", "aac", "-b:a", "192k",

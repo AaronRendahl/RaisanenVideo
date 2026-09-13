@@ -2,7 +2,6 @@
 
 OPT_8MM=false
 
-# Parse options
 while getopts "8" opt; do
   case "$opt" in
     8) OPT_8MM=true ;;
@@ -22,8 +21,8 @@ if [[ -z "$1" ]]; then
 fi
 
 VIDIN="$1"
-INPUT_FILE="${VIDIN}.mpg"
-OUTPUT_FILE="${VIDIN}.mkv"
+INPUT_FILE="04_originals/${VIDIN}.mpg"
+OUTPUT_FILE="01_archive/${VIDIN}.mkv"
 
 if [[ ! -f "$INPUT_FILE" ]]; then
   echo "Error: Input file '$INPUT_FILE' not found!"

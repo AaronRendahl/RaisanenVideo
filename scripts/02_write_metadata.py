@@ -13,29 +13,24 @@ SRC_DIR = PROJECT_ROOT / "src"
 # Add src/ to Python path for imports
 sys.path.insert(0, str(SRC_DIR))
 
-from models import parse_spec_file
+from spec_reader import read_tape_spec
 from mkv_writer import write_mkv_metadata
 
 
 def resolve_tape_name(input_str: str) -> str:
     """Extract bare tape name from full path or plain string."""
-    path = Path(input_str)
-    # Handles tab-completed paths like '03_specs/tape_001.txt' or 'tape_001'
-    return path.stem
+    return Path(input_str).stem
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python scripts/write_metadata.py <TAPE_NAME_OR_PATH>")
-        print("Example: python scripts/write_metadata.py Raisanen-8mm")
-        print("Example: python scripts/write_metadata.py 03_specs/Raisanen-8mm.txt")
+        print("Usage: ./scripts/02_write_metadata.py <TAPE_NAME_OR_PATH>")
         sys.exit(1)
 
     tape_name = resolve_tape_name(sys.argv[1])
     spec_path = SPECS_DIR / f"{tape_name}.txt"
     mkv_path = ARCHIVE_DIR / f"{tape_name}.mkv"
 
-    # Input validation
     if not spec_path.exists():
         print(f"Error: Spec file not found at '{spec_path}'")
         sys.exit(1)
@@ -45,7 +40,7 @@ def main():
         sys.exit(1)
 
     print(f"Parsing spec file: {spec_path.name}")
-    data = parse_spec_file(str(spec_path))
+    data = read_tape_spec(spec_path.read_text())
 
     write_mkv_metadata(str(mkv_path), data)
 

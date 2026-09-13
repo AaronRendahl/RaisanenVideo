@@ -1,55 +1,84 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
+#
+# 01_clean_tape.sh
+#
+# Remuxes raw analog capture files into standardized, clean Matroska (.mkv) masters.
+# Rebuilds presentation timestamps (PTS) while preserving all video frames
+# to guarantee rock-solid timestamp accuracy and perfect A/V sync.
+#
+# Usage:
+#   ./scripts/01_clean_tape.sh [-8] <INPUT_FILE> [OUTPUT_FILE]
+#
+# Options:
+#   -8    8mm tape mode: Applies 1.5x slowdown to video PTS and strips audio.
+#
 
-OPT_8MM=false
+set -euo pipefail
+
+IS_8MM=false
 
 while getopts "8" opt; do
-  case "$opt" in
-    8) OPT_8MM=true ;;
-    ?)
-       echo "Usage: $0 [-8] <TAPE_NAME_OR_PATH>"
-       exit 1
-       ;;
+  case ${opt} in
+    8 )
+      IS_8MM=true
+      ;;
+    \? )
+      echo "Usage: $0 [-8] <INPUT_FILE> [OUTPUT_FILE]"
+      exit 1
+      ;;
   esac
 done
+shift $((OPTIND -1))
 
-shift $((OPTIND - 1))
-
-if [[ -z "$1" ]]; then
-  echo "Error: No input file specified!"
-  echo "Usage: $0 [-8] <TAPE_NAME_OR_PATH>"
-  exit 1
+if [ "$#" -lt 1 ]; then
+    echo "Usage: $0 [-8] <INPUT_FILE> [OUTPUT_FILE]"
+    exit 1
 fi
 
-RAW_INPUT="$1"
+INPUT_FILE="$1"
 
-# 1. Resolve Input File
-if [[ -f "$RAW_INPUT" ]]; then
-  # Path provided directly via tab completion or explicit argument
-  INPUT_FILE="$RAW_INPUT"
-elif [[ -f "04_originals/${RAW_INPUT}" ]]; then
-  # Found directly inside 04_originals with full filename
-  INPUT_FILE="04_originals/${RAW_INPUT}"
-elif [[ -f "04_originals/${RAW_INPUT}.mpg" ]]; then
-  # Fallback: Bare name provided, append .mpg extension in 04_originals
-  INPUT_FILE="04_originals/${RAW_INPUT}.mpg"
+if [ ! -f "$INPUT_FILE" ]; then
+    echo "Error: Input file '$INPUT_FILE' does not exist."
+    exit 1
+fi
+
+# Determine default output path in 01_archive/ if not explicitly provided
+if [ "$#" -ge 2 ]; then
+    OUTPUT_FILE="$2"
 else
-  echo "Error: Input file not found! Checked:"
-  echo "  - $RAW_INPUT"
-  echo "  - 04_originals/${RAW_INPUT}"
-  echo "  - 04_originals/${RAW_INPUT}.mpg"
-  exit 1
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+    ARCHIVE_DIR="$PROJECT_ROOT/01_archive"
+
+    mkdir -p "$ARCHIVE_DIR"
+
+    TAPE_NAME="$(basename "$INPUT_FILE")"
+    TAPE_STEM="${TAPE_NAME%.*}"
+    OUTPUT_FILE="$ARCHIVE_DIR/${TAPE_STEM}.mkv"
 fi
 
-# 2. Derive Output File Name (always lands in 01_archive with .mkv extension)
-TAPE_NAME="${${INPUT_FILE:t}:r}"
-OUTPUT_FILE="01_archive/${TAPE_NAME}.mkv"
+echo "=== Cleaning & Remuxing Master Tape ==="
+echo "Input : $INPUT_FILE"
+echo "Output: $OUTPUT_FILE"
 
-if $OPT_8MM; then
-  echo ">>> Processing 8mm Film: Losslessly stretching timestamps by 1.5x and stripping audio <<<"
-  mkvmerge -q -o "$OUTPUT_FILE" --no-audio --sync 0:0,1.5 "$INPUT_FILE"
+if [ "$IS_8MM" = true ]; then
+    echo "Mode  : 8mm Tape Transfer (1.5x slowdown, stripping audio)"
+    ffmpeg -hide_banner -loglevel error -y \
+      -fflags +genpts \
+      -itsscale 1.5 \
+      -i "$INPUT_FILE" \
+      -c:v copy \
+      -an \
+      -max_muxing_queue_size 1024 \
+      "$OUTPUT_FILE"
 else
-  echo ">>> Processing Standard Video: Lossless remux with original audio <<<"
-  mkvmerge -q -o "$OUTPUT_FILE" "$INPUT_FILE"
+    echo "Mode  : Standard Tape (Original speed and audio)"
+    ffmpeg -hide_banner -loglevel error -y \
+      -fflags +genpts \
+      -i "$INPUT_FILE" \
+      -c copy \
+      -max_muxing_queue_size 1024 \
+      "$OUTPUT_FILE"
 fi
 
-echo "Done! Pure lossless master file saved to $OUTPUT_FILE"
+echo "Done! Master created successfully at: $OUTPUT_FILE"

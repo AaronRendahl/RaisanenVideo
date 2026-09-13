@@ -131,10 +131,10 @@ def write_mkv_metadata(mkv_path: str, data: ArchiveData) -> None:
             "--chapters",
             chap_file,
             "--tags",
-            f"global:{tags_file}",
+            f"all:{tags_file}",
         ]
 
-        # Apply native video track cropping header properties
+        # Apply or clear native video track cropping header properties
         crop_vals = parse_crop_string(data.global_crop)
         if crop_vals:
             top, bottom, left, right = crop_vals
@@ -150,6 +150,22 @@ def write_mkv_metadata(mkv_path: str, data: ArchiveData) -> None:
                     f"pixel-crop-left={left}",
                     "--set",
                     f"pixel-crop-right={right}",
+                ]
+            )
+        else:
+            # Clear any previously written crop header fields on re-runs
+            cmd.extend(
+                [
+                    "--edit",
+                    "track:v1",
+                    "--delete",
+                    "pixel-crop-top",
+                    "--delete",
+                    "pixel-crop-bottom",
+                    "--delete",
+                    "pixel-crop-left",
+                    "--delete",
+                    "pixel-crop-right",
                 ]
             )
 

@@ -30,23 +30,16 @@ if [[ ! -f "$INPUT_FILE" ]]; then
 fi
 
 if $OPT_8MM; then
-  echo ">>> Processing 8mm Film: Losslessly stretching container timestamps by 1.5x (mkvmerge) <<<"
+  echo ">>> Processing 8mm Film: Losslessly stretching timestamps by 1.5x and stripping audio <<<"
 
   # --no-audio strips audio stream
-  # --sync 0:15/10 stretches video track 0 timestamps by 1.5x without re-encoding
-  mkvmerge -q -o "$OUTPUT_FILE" --no-audio --sync 0:15/10 "$INPUT_FILE"
+  # --sync 0:0,1.5 sets delay=0ms and applies 1.5x speed factor to track 0
+  mkvmerge -q -o "$OUTPUT_FILE" --no-audio --sync 0:0,1.5 "$INPUT_FILE"
 
 else
-  echo ">>> Processing Standard Video: Stream copy (ffmpeg) <<<"
+  echo ">>> Processing Standard Video: Lossless remux with original audio <<<"
 
-  ffmpeg -hide_banner -loglevel error -y \
-    -fflags +genpts+discardcorrupt \
-    -i "$INPUT_FILE" \
-    -c:v copy \
-    -c:a copy \
-    -max_muxing_queue_size 1024 \
-    -avoid_negative_ts make_zero \
-    "$OUTPUT_FILE"
+  mkvmerge -q -o "$OUTPUT_FILE" "$INPUT_FILE"
 fi
 
 echo "Done! Pure lossless master file saved to $OUTPUT_FILE"

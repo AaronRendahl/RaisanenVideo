@@ -46,12 +46,15 @@ def parse_timestamp_to_ms(ts_str: str) -> int:
 
 
 def build_crop_filter(crop_str: str) -> str:
-    """Convert spec crop 'top bottom left right' into FFmpeg crop filter string."""
+    """
+    Convert spec crop 'LEFT RIGHT TOP BOTTOM' into FFmpeg crop filter string.
+    FFmpeg crop syntax: crop=out_w:out_h:x:y
+    """
     if not crop_str:
         return ""
     parts = crop_str.split()
     if len(parts) == 4:
-        top, bottom, left, right = map(int, parts)
+        left, right, top, bottom = map(int, parts)
         return f"crop=iw-{left}-{right}:ih-{top}-{bottom}:{left}:{top}"
     return ""
 
@@ -91,11 +94,17 @@ def generate_ffmetadata(clip, clip_start_sec: float, total_duration_sec: float) 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: ./scripts/03_make_clips.py <TAPE_NAME> [--frames-only]")
+        print("Usage: ./scripts/03_make_clips.py [--frames-only] <TAPE_NAME>")
         sys.exit(1)
 
-    tape_name = Path(sys.argv[1]).stem
     frames_only = "--frames-only" in sys.argv
+    tape_args = [arg for arg in sys.argv[1:] if arg != "--frames-only"]
+
+    if not tape_args:
+        print("Error: Missing tape name argument.")
+        sys.exit(1)
+
+    tape_name = Path(tape_args[0]).stem
 
     spec_path = SPECS_DIR / f"{tape_name}.txt"
     mkv_path = ARCHIVE_DIR / f"{tape_name}.mkv"
@@ -134,36 +143,37 @@ def main():
         safe_title = "".join(c if c.isalnum() or c in (" ", "-", "_") else "" for c in clip.title).strip().replace(" ", "_")
         clip_prefix = f"{tape_name}_{clip.idx}_{safe_title}"
 
-        # Crop Geometry
+        # Crop Geometry (Left Right Top Bottom)
         crop_val = clip.crop if clip.crop else data.global_crop
         ffmpeg_crop = build_crop_filter(crop_val)
 
         if frames_only:
-            timestamps = {
-                "first": start_sec,
-                "mid": mid_sec,
-                "last": max(start_sec, end_sec - 0.1)
-            }
+            # Position mappings: 1 = first, 2 = mid, 3 = last
+            timestamps = [
+                ("1", start_sec),
+                ("2", mid_sec),
+                ("3", max(start_sec, end_sec - 0.1))
+            ]
             
-            for pos_name, t_sec in timestamps.items():
-                # Uncropped frame
-                uncropped_out = tape_clips_dir / f"{clip_prefix}_{pos_name}_uncropped.png"
+            for num_code, t_sec in timestamps:
+                # 'a' = uncropped
+                uncropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}a.png"
                 cmd_uncropped = [
                     "ffmpeg", "-y", "-ss", str(t_sec), "-i", str(mkv_path),
                     "-vframes", "1", str(uncropped_out)
                 ]
                 subprocess.run(cmd_uncropped, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-                # Cropped frame
+                # 'b' = cropped
                 if ffmpeg_crop:
-                    cropped_out = tape_clips_dir / f"{clip_prefix}_{pos_name}_cropped.png"
+                    cropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}b.png"
                     cmd_cropped = [
                         "ffmpeg", "-y", "-ss", str(t_sec), "-i", str(mkv_path),
                         "-vf", ffmpeg_crop, "-vframes", "1", str(cropped_out)
                     ]
                     subprocess.run(cmd_cropped, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            print(f"[{clip.idx}] Captured diagnostic frames for clip: {clip.title}")
+            print(f"[{clip.idx}] Captured diagnostic frames (1a/1b, 2a/2b, 3a/3b) for: {clip.title}")
             continue
 
         # Full MP4 Clip Generation

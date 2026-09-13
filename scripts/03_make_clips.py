@@ -2,8 +2,9 @@
 """
 03_make_clips.py
 
-CLI entrypoint to generate derivative MP4 clips (1 file per top-level Clip)
-with embedded MP4 chapter markers for subchapters, plus diagnostic frame snapshots.
+CLI entrypoint to generate derivative MP4 clips (1 continuous file per top-level Clip)
+by concatenating active subchapters/segments, removing dead gaps, and embedding
+re-aligned MP4 chapter markers.
 """
 
 import sys
@@ -40,11 +41,6 @@ def parse_timestamp_to_seconds(ts_str: str) -> float:
     return float(ts_str)
 
 
-def parse_timestamp_to_ms(ts_str: str) -> int:
-    """Convert timestamp to integer milliseconds for FFmetadata format."""
-    return int(parse_timestamp_to_seconds(ts_str) * 1000)
-
-
 def build_crop_filter(crop_str: str) -> str:
     """
     Convert spec crop 'LEFT RIGHT TOP BOTTOM' into FFmpeg crop filter string.
@@ -59,35 +55,53 @@ def build_crop_filter(crop_str: str) -> str:
     return ""
 
 
-def generate_ffmetadata(clip, clip_start_sec: float, total_duration_sec: float) -> str:
+def resolve_subsegments(clip, total_duration_sec: float):
     """
-    Generates FFmetadata text format for embedding subchapter markers into MP4.
-    Timestamps are converted to relative offsets from the clip's start time.
+    Returns a list of active subsegment tuples: (start_sec, end_sec, title)
+    """
+    segments = []
+    if clip.subchapters:
+        for i, sub in enumerate(clip.subchapters):
+            s_sec = parse_timestamp_to_seconds(sub.start)
+            if sub.end:
+                e_sec = parse_timestamp_to_seconds(sub.end)
+            elif i + 1 < len(clip.subchapters):
+                e_sec = parse_timestamp_to_seconds(clip.subchapters[i + 1].start)
+            else:
+                e_sec = parse_timestamp_to_seconds(clip.end) if clip.end else total_duration_sec
+            segments.append((s_sec, e_sec, sub.title))
+    else:
+        s_sec = parse_timestamp_to_seconds(clip.start) if clip.start else 0.0
+        e_sec = parse_timestamp_to_seconds(clip.end) if clip.end else total_duration_sec
+        segments.append((s_sec, e_sec, clip.title))
+    return segments
+
+
+def generate_concat_ffmetadata(clip, segments) -> str:
+    """
+    Generates FFmetadata text format where subchapter markers are shifted to map
+    to the newly concatenated timeline.
     """
     lines = [";FFMETADATA1", f"title={clip.title}"]
     if clip.date:
         lines.append(f"date={clip.date}")
 
-    clip_start_ms = int(clip_start_sec * 1000)
+    current_timeline_ms = 0
 
-    for i, sub in enumerate(clip.subchapters):
-        sub_start_ms = parse_timestamp_to_ms(sub.start) - clip_start_ms
-        
-        # Calculate subchapter end time relative to clip start
-        if sub.end:
-            sub_end_ms = parse_timestamp_to_ms(sub.end) - clip_start_ms
-        elif i + 1 < len(clip.subchapters):
-            sub_end_ms = parse_timestamp_to_ms(clip.subchapters[i + 1].start) - clip_start_ms
-        else:
-            sub_end_ms = int(total_duration_sec * 1000) - clip_start_ms
+    for s_sec, e_sec, sub_title in segments:
+        duration_ms = int((e_sec - s_sec) * 1000)
+        start_ms = current_timeline_ms
+        end_ms = current_timeline_ms + duration_ms
 
         lines.extend([
             "[CHAPTER]",
             "TIMEBASE=1/1000",
-            f"START={max(0, sub_start_ms)}",
-            f"END={max(0, sub_end_ms)}",
-            f"title={sub.title}"
+            f"START={start_ms}",
+            f"END={end_ms}",
+            f"title={sub_title}"
         ])
+
+        current_timeline_ms = end_ms
 
     return "\n".join(lines) + "\n"
 
@@ -128,18 +142,9 @@ def main():
 
     print(f"{'Generating diagnostic frames' if frames_only else 'Encoding clip MP4s'} for: {tape_name}")
 
-    # Process each top-level Clip as ONE output file
     for clip in data.clips:
-        start_sec = parse_timestamp_to_seconds(clip.start) if clip.start else 0.0
+        segments = resolve_subsegments(clip, total_duration_sec)
         
-        if clip.end:
-            end_sec = parse_timestamp_to_seconds(clip.end)
-        else:
-            end_sec = total_duration_sec
-
-        duration_sec = end_sec - start_sec
-        mid_sec = start_sec + (duration_sec / 2.0)
-
         safe_title = "".join(c if c.isalnum() or c in (" ", "-", "_") else "" for c in clip.title).strip().replace(" ", "_")
         clip_prefix = f"{tape_name}_{clip.idx}_{safe_title}"
 
@@ -148,15 +153,15 @@ def main():
         ffmpeg_crop = build_crop_filter(crop_val)
 
         if frames_only:
-            # Position mappings: 1 = first, 2 = mid, 3 = last
-            timestamps = [
-                ("1", start_sec),
-                ("2", mid_sec),
-                ("3", max(start_sec, end_sec - 0.1))
-            ]
+            # Diagnostics: first frame of first segment, mid of middle segment, last of last segment
+            first_sec = segments[0][0]
+            mid_seg = segments[len(segments) // 2]
+            mid_sec = mid_seg[0] + ((mid_seg[1] - mid_seg[0]) / 2.0)
+            last_sec = max(segments[-1][0], segments[-1][1] - 0.1)
+
+            timestamps = [("1", first_sec), ("2", mid_sec), ("3", last_sec)]
             
             for num_code, t_sec in timestamps:
-                # 'a' = uncropped
                 uncropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}a.png"
                 cmd_uncropped = [
                     "ffmpeg", "-y", "-loglevel", "warning",
@@ -165,7 +170,6 @@ def main():
                 ]
                 subprocess.run(cmd_uncropped, check=True)
 
-                # 'b' = cropped
                 if ffmpeg_crop:
                     cropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}b.png"
                     cmd_cropped = [
@@ -178,38 +182,49 @@ def main():
             print(f"[{clip.idx}] Captured diagnostic frames (1a/1b, 2a/2b, 3a/3b) for: {clip.title}")
             continue
 
-        # Full MP4 Clip Generation
         output_mp4 = CLIPS_DIR / f"{clip_prefix}.mp4"
 
-        # Build FFmpeg video filters
-        vf_chains = ["bwdif=mode=send_field:deint=all"]
-        if ffmpeg_crop:
-            vf_chains.append(ffmpeg_crop)
-        vf_arg = ",".join(vf_chains)
-
-        # Generate temporary FFmetadata file for chapter markers
-        ffmeta_content = generate_ffmetadata(clip, start_sec, total_duration_sec)
+        # Build FFmpeg command with complex filter for segment trimming & concating
+        cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
         
+        # Add input stream per segment
+        for s_sec, e_sec, _ in segments:
+            cmd.extend(["-ss", str(s_sec), "-to", str(e_sec), "-i", str(mkv_path)])
+
+        # Build filtergraph
+        vf_base = "bwdif=mode=send_field:deint=all"
+        if ffmpeg_crop:
+            vf_base += f",{ffmpeg_crop}"
+
+        filter_lines = []
+        for idx in range(len(segments)):
+            filter_lines.append(f"[{idx}:v]{vf_base}[v{idx}];")
+            filter_lines.append(f"[{idx}:a]anull[a{idx}];")
+        
+        concat_inputs = "".join(f"[v{idx}][a{idx}]" for idx in range(len(segments)))
+        filter_lines.append(f"{concat_inputs}concat=n={len(segments)}:v=1:a=1[outv][outa]")
+        
+        filter_complex_str = "".join(filter_lines)
+
+        # Build temporary metadata file
+        ffmeta_content = generate_concat_ffmetadata(clip, segments)
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as meta_file:
             meta_file.write(ffmeta_content)
             meta_path = meta_file.name
 
-        try:
-            cmd = [
-                "ffmpeg", "-y",
-                "-loglevel", "warning",
-                "-ss", str(start_sec),
-                "-to", str(end_sec),
-                "-i", str(mkv_path),
-                "-i", meta_path,
-                "-map_metadata", "1",
-                "-vf", vf_arg,
-                "-c:v", "libx264", "-crf", "18", "-preset", "slow",
-                "-c:a", "aac", "-b:a", "192k",
-                str(output_mp4)
-            ]
+        cmd.extend([
+            "-i", meta_path,
+            "-filter_complex", filter_complex_str,
+            "-map", "[outv]",
+            "-map", "[outa]",
+            "-map_metadata", f"{len(segments)}",
+            "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+            "-c:a", "aac", "-b:a", "192k",
+            str(output_mp4)
+        ])
 
-            print(f"Encoding clip [{clip.idx}]: {clip.title} (with {len(clip.subchapters)} embedded chapter markers)...")
+        try:
+            print(f"Encoding clip [{clip.idx}]: {clip.title} ({len(segments)} concatenated segment(s))...")
             subprocess.run(cmd, check=True)
         finally:
             Path(meta_path).unlink(missing_ok=True)

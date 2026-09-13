@@ -29,23 +29,24 @@ if [[ ! -f "$INPUT_FILE" ]]; then
   exit 1
 fi
 
-# Configure Audio Stream
 if $OPT_8MM; then
-  AUDIO_ARG="-an"
+  echo ">>> Processing 8mm Film: Losslessly stretching container timestamps by 1.5x (mkvmerge) <<<"
+
+  # --no-audio strips audio stream
+  # --sync 0:15/10 stretches video track 0 timestamps by 1.5x without re-encoding
+  mkvmerge -q -o "$OUTPUT_FILE" --no-audio --sync 0:15/10 "$INPUT_FILE"
+
 else
-  AUDIO_ARG="-c:a copy"
+  echo ">>> Processing Standard Video: Stream copy (ffmpeg) <<<"
+
+  ffmpeg -hide_banner -loglevel error -y \
+    -fflags +genpts+discardcorrupt \
+    -i "$INPUT_FILE" \
+    -c:v copy \
+    -c:a copy \
+    -max_muxing_queue_size 1024 \
+    -avoid_negative_ts make_zero \
+    "$OUTPUT_FILE"
 fi
 
-echo "Cleaning tape '$INPUT_FILE' -> '$OUTPUT_FILE'..."
-
-ffmpeg -hide_banner -loglevel error -y \
-  -fflags +genpts+discardcorrupt \
-  -i "$INPUT_FILE" \
-  -c:v copy \
-  ${=AUDIO_ARG} \
-  -max_muxing_queue_size 1024 \
-  -avoid_negative_ts make_zero \
-  "$OUTPUT_FILE"
-
-echo "Done! File saved to $OUTPUT_FILE"
-
+echo "Done! Pure lossless master file saved to $OUTPUT_FILE"

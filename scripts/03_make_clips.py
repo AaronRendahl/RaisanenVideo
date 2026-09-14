@@ -341,7 +341,7 @@ def main():
                         "-map_metadata", f"{meta_idx}",
                         "-map_chapters", f"{meta_idx}",
                         "-movflags", "+faststart",
-                        "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                        "-c:v", "libx264", "-crf", "22", "-preset", "fast",
                         "-c:a", "aac", "-b:a", "192k",
                         str(output_mp4)
                     ])
@@ -361,7 +361,7 @@ def main():
                         "-map_chapters", "1",
                         "-movflags", "+faststart",
                         "-vf", vf_base,
-                        "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+                        "-c:v", "libx264", "-crf", "22", "-preset", "fast",
                         "-c:a", "aac", "-b:a", "192k",
                         str(output_mp4)
                     ]

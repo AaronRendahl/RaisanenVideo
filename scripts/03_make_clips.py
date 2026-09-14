@@ -18,7 +18,7 @@ Flags:
 
   --frames-only       Shortcut flag to generate both uncropped ('a') and cropped ('b') PNG snapshots.
 
-  --clean, --clean-log Wipes all PNG snapshots and log files in the diagnostic directory and exits.
+  --clean, --clean-log Removes the entire diagnostic directory (<TAPE_NAME>-log) and exits.
 
   (No Flags)          Runs full derivative clip MP4 encoding pipeline. Does not extract PNGs.
 
@@ -155,7 +155,7 @@ def generate_concat_ffmetadata(clip, segments) -> str:
     return "\n".join(lines) + "\n"
 
 
-def clean_directory(dir_path: Path, do_uncropped: bool = False, do_cropped: bool = False, frames_mode: bool = False, clean_all: bool = False):
+def clean_directory(dir_path: Path, do_uncropped: bool = False, do_cropped: bool = False, frames_mode: bool = False):
     """Targeted removal of PNG snapshots and log files based on run mode."""
     if not dir_path.exists():
         return
@@ -164,11 +164,6 @@ def clean_directory(dir_path: Path, do_uncropped: bool = False, do_cropped: bool
             continue
         
         name = item.name.lower()
-        
-        if clean_all:
-            if name.endswith(".png") or name.endswith(".log"):
-                item.unlink()
-            continue
 
         # If running full encode, clear log file
         if not frames_mode and name.endswith(".log"):
@@ -207,15 +202,18 @@ def main():
     tape_output_dir = CLIPS_DIR / tape_name
     tape_log_dir = CLIPS_DIR / f"{tape_name}-log"
 
+    # Handle --clean / --clean-log flag
+    if do_clean:
+        if tape_log_dir.exists():
+            print(f"Removing diagnostic log directory: {tape_log_dir}")
+            shutil.rmtree(tape_log_dir)
+            print("Clean complete!")
+        else:
+            print(f"Diagnostic directory '{tape_log_dir}' does not exist. Nothing to clean.")
+        sys.exit(0)
+
     tape_output_dir.mkdir(exist_ok=True)
     tape_log_dir.mkdir(exist_ok=True)
-
-    # Handle --clean flag
-    if do_clean:
-        print(f"Cleaning diagnostic directory: {tape_log_dir}")
-        clean_directory(tape_log_dir, clean_all=True)
-        print("Clean complete!")
-        sys.exit(0)
 
     spec_path = SPECS_DIR / f"{tape_name}.txt"
     mkv_path = ARCHIVE_DIR / f"{tape_name}.mkv"
@@ -282,8 +280,7 @@ def main():
                                 "ffmpeg", "-y", "-loglevel", "warning",
                                 "-ss", str(t_sec), "-i", str(mkv_path),
                                 "-vf", "format=rgb24",
-                                "-vframes", "1", "-update", "1", 
-                                "-sws_flags", "fast_bilinear",
+                                "-vframes", "1", "-update", "1",
                                 str(uncropped_out)
                             ]
                             subprocess.run(cmd_uncropped, stdout=log_file, stderr=log_file, check=True)
@@ -295,8 +292,8 @@ def main():
                                 cmd_cropped = [
                                     "ffmpeg", "-y", "-loglevel", "warning",
                                     "-ss", str(t_sec), "-i", str(mkv_path),
-                                    "-vf", f"{ffmpeg_crop},format=rgb24", 
-                                    "-vframes", "1", "-update", "1", 
+                                    "-vf", f"{ffmpeg_crop},format=rgb24",
+                                    "-vframes", "1", "-update", "1",
                                     str(cropped_out)
                                 ]
                                 subprocess.run(cmd_cropped, stdout=log_file, stderr=log_file, check=True)

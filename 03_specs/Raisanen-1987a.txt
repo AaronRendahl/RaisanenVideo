@@ -13,7 +13,7 @@
 02.3|00:19:13.376|00:21:25.361|family
 
 03|||Joe & Willy Karate
-03.1|00:21:28.000|00:22:36.794|Joe karate inside
+03.1|00:21:27.153|00:22:36.794|Joe karate inside
 03.2|00:22:37.770|00:23:41.420|Joe karate outside
 03.3|00:23:41.487|00:24:48.924|Willy karate outside
 

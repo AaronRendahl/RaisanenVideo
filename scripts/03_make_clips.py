@@ -43,6 +43,7 @@ Diagnostic Frame Naming Convention:
 """
 
 import sys
+import time
 import shutil
 import tempfile
 import subprocess
@@ -75,6 +76,15 @@ def parse_timestamp_to_seconds(ts_str: str) -> float:
         m, s = parts
         return int(m) * 60 + float(s)
     return float(ts_str)
+
+
+def format_elapsed_time(seconds: float) -> str:
+    """Formats floating-point seconds into human-readable duration."""
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    minutes = int(seconds // 60)
+    rem_seconds = seconds % 60
+    return f"{minutes}m {rem_seconds:.1f}s"
 
 
 def build_crop_filter(crop_str: str) -> str:
@@ -246,10 +256,13 @@ def main():
         print(f"Encoding clip MP4s for: {tape_name}")
 
     print(f"Clips Directory:     {tape_output_dir}")
-    print(f"Diagnostics & Logs:  {tape_log_dir}")
+    print(f"Diagnostics & Logs:  {tape_log_dir}\n")
+
+    tape_start_time = time.perf_counter()
 
     with open(log_file_path, "a", encoding="utf-8") as log_file:
         for clip in data.clips:
+            clip_start_time = time.perf_counter()
             segments = resolve_subsegments(clip, total_duration_sec)
             
             safe_title = "".join(c if c.isalnum() or c in (" ", "-", "_") else "" for c in clip.title).strip().replace(" ", "_")
@@ -260,7 +273,7 @@ def main():
             ffmpeg_crop = build_crop_filter(crop_val)
 
             if frames_mode:
-                print(f"[{clip.idx}] Capturing per-subchapter diagnostic frames for: {clip.title}")
+                print(f"[{clip.idx}] Capturing diagnostic frames for: {clip.title}...", end="", flush=True)
                 
                 # Iterate over every subchapter segment
                 for sub_idx, (s_sec, e_sec, sub_title) in enumerate(segments, start=1):
@@ -297,8 +310,9 @@ def main():
                                     str(cropped_out)
                                 ]
                                 subprocess.run(cmd_cropped, stdout=log_file, stderr=log_file, check=True)
-                            else:
-                                print(f"  Notice: No crop parameters set for clip {clip.idx}; skipping 'b' frame.")
+                
+                elapsed_str = format_elapsed_time(time.perf_counter() - clip_start_time)
+                print(f" Done ({elapsed_str})")
                 continue
 
             output_mp4 = tape_output_dir / f"{clip_prefix}.mp4"
@@ -317,7 +331,7 @@ def main():
 
             try:
                 if is_gapped or len(segments) > 1:
-                    print(f"Encoding clip [{clip.idx}]: {clip.title} ({len(segments)} segments concatenated)...")
+                    print(f"[{clip.idx}] Encoding concatenated clip: {clip.title} ({len(segments)} segments)...", end="", flush=True)
                     cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
                     
                     # Fast input-side seeking: -ss / -to BEFORE -i
@@ -348,7 +362,7 @@ def main():
                 else:
                     clip_start = segments[0][0]
                     clip_end = segments[-1][1]
-                    print(f"Encoding clip [{clip.idx}]: {clip.title} (single-pass encode)...")
+                    print(f"[{clip.idx}] Encoding single clip: {clip.title}...", end="", flush=True)
                     
                     # Fast input-side seeking: -ss / -to BEFORE -i
                     cmd = [
@@ -369,10 +383,15 @@ def main():
                 log_file.write(f"\n--- Encoding Clip [{clip.idx}]: {clip.title} ---\n")
                 log_file.flush()
                 subprocess.run(cmd, stdout=log_file, stderr=log_file, check=True)
+                
+                elapsed_str = format_elapsed_time(time.perf_counter() - clip_start_time)
+                print(f" Done ({elapsed_str})")
+                log_file.write(f"Completed in {elapsed_str}\n")
             finally:
                 Path(meta_path).unlink(missing_ok=True)
 
-    print("Done!")
+    total_elapsed_str = format_elapsed_time(time.perf_counter() - tape_start_time)
+    print(f"\nAll operations complete for '{tape_name}' in {total_elapsed_str}!")
 
 
 if __name__ == "__main__":

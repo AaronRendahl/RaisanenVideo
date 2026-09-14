@@ -126,10 +126,10 @@ def has_gaps(segments) -> bool:
     return False
 
 
-def generate_concat_ffmetadata(clip, segments) -> str:
+def generate_concat_ffmetadata(clip, segments, is_test: bool = False) -> str:
     """
     Generates FFmetadata text format where subchapter markers are shifted to map
-    to the newly concatenated timeline.
+    to the newly concatenated timeline. Clamps subchapters to 10s if in test mode.
     """
     lines = [";FFMETADATA1", f"title={clip.title}"]
     if clip.date:
@@ -138,9 +138,20 @@ def generate_concat_ffmetadata(clip, segments) -> str:
     current_timeline_ms = 0
 
     for s_sec, e_sec, sub_title in segments:
-        duration_ms = int((e_sec - s_sec) * 1000)
+        if is_test:
+            effective_end = min(e_sec, s_sec + 10.0)
+        else:
+            effective_end = e_sec
+
+        duration_ms = int((effective_end - s_sec) * 1000)
         start_ms = current_timeline_ms
         end_ms = current_timeline_ms + duration_ms
+
+        if is_test and start_ms >= 10000:
+            break
+
+        if is_test and end_ms > 10000:
+            end_ms = 10000
 
         lines.extend([
             "[CHAPTER]",
@@ -151,6 +162,8 @@ def generate_concat_ffmetadata(clip, segments) -> str:
         ])
 
         current_timeline_ms = end_ms
+        if is_test and current_timeline_ms >= 10000:
+            break
 
     return "\n".join(lines) + "\n"
 
@@ -325,8 +338,8 @@ def main():
             if ffmpeg_crop:
                 vf_base += f",{ffmpeg_crop}"
 
-            # Build metadata file
-            ffmeta_content = generate_concat_ffmetadata(clip, segments)
+            # Build metadata file with clamped chapter bounds for test mode
+            ffmeta_content = generate_concat_ffmetadata(clip, segments, is_test=do_test)
             with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as meta_file:
                 meta_file.write(ffmeta_content)
                 meta_path = meta_file.name

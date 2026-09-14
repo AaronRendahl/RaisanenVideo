@@ -19,8 +19,8 @@ Flags:
 
   --frames-only       Shortcut flag to generate both uncropped ('a') and cropped ('b') PNG snapshots.
 
-  --test, --test-clips Encodes 10-second sample MP4s into the log folder to quickly verify
-                      macOS Finder previews and cut quality without full encoding.
+  --test, --test-clips Encodes 10-second sample preview MP4s per subchapter into the log folder to 
+                      quickly verify macOS Finder previews and cut quality without full encoding.
 
   --clean, --clean-log Removes the entire diagnostic directory (<TAPE_NAME>-log) and exits.
 
@@ -130,7 +130,7 @@ def has_gaps(segments) -> bool:
 def generate_concat_ffmetadata(clip, segments, is_test: bool = False) -> str:
     """
     Generates FFmetadata text format where subchapter markers are shifted to map
-    to the newly concatenated timeline. Clamps subchapters to 10s if in test mode.
+    to the output timeline. In test mode, each segment is allocated exactly 10 seconds.
     """
     lines = [";FFMETADATA1", f"title={clip.title}"]
     if clip.date:
@@ -140,19 +140,13 @@ def generate_concat_ffmetadata(clip, segments, is_test: bool = False) -> str:
 
     for s_sec, e_sec, sub_title in segments:
         if is_test:
-            effective_end = min(e_sec, s_sec + 10.0)
+            duration_sec = min(10.0, max(0.1, e_sec - s_sec))
         else:
-            effective_end = e_sec
+            duration_sec = e_sec - s_sec
 
-        duration_ms = int((effective_end - s_sec) * 1000)
+        duration_ms = int(duration_sec * 1000)
         start_ms = current_timeline_ms
         end_ms = current_timeline_ms + duration_ms
-
-        if is_test and start_ms >= 10000:
-            break
-
-        if is_test and end_ms > 10000:
-            end_ms = 10000
 
         lines.extend([
             "[CHAPTER]",
@@ -163,8 +157,6 @@ def generate_concat_ffmetadata(clip, segments, is_test: bool = False) -> str:
         ])
 
         current_timeline_ms = end_ms
-        if is_test and current_timeline_ms >= 10000:
-            break
 
     return "\n".join(lines) + "\n"
 
@@ -255,7 +247,7 @@ def main():
     log_file_path = tape_log_dir / "ffmpeg_encode.log"
 
     if do_test:
-        print(f"Generating 10-second TEST clips in: {tape_log_dir}")
+        print(f"Generating 10-second TEST clips per subchapter in: {tape_log_dir}")
     elif frames_mode:
         mode_desc = []
         if do_uncropped:
@@ -340,26 +332,26 @@ def main():
                 vf_base += f",{ffmpeg_crop}"
             vf_base += ",setpts=PTS-STARTPTS"
 
-            # Build metadata file with clamped chapter bounds for test mode
+            # Build metadata file with updated subchapter bounds
             ffmeta_content = generate_concat_ffmetadata(clip, segments, is_test=do_test)
             with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as meta_file:
                 meta_file.write(ffmeta_content)
                 meta_path = meta_file.name
 
             try:
+                # Stage 1 command setup
+                cmd_stage1 = ["ffmpeg", "-nostdin", "-y", "-loglevel", "warning", "-fflags", "+genpts+discardcorrupt"]
+                
+                for s_sec, e_sec, _ in segments:
+                    cmd_stage1.extend(["-ss", str(s_sec)])
+                    if do_test:
+                        cmd_stage1.extend(["-to", str(min(e_sec, s_sec + 10.0))])
+                    else:
+                        cmd_stage1.extend(["-to", str(e_sec)])
+                    cmd_stage1.extend(["-i", str(mkv_path)])
+
                 if is_gapped or len(segments) > 1:
                     print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}concatenated clip (two-stage pipe): {clip.title}...", end="", flush=True)
-                    
-                    # Stage 1: Demux, seek, deinterlace, crop, PTS reset -> stream raw YUV to nut pipe
-                    cmd_stage1 = ["ffmpeg", "-nostdin", "-y", "-loglevel", "warning", "-fflags", "+genpts+discardcorrupt"]
-                    
-                    for s_sec, e_sec, _ in segments:
-                        cmd_stage1.extend(["-ss", str(s_sec)])
-                        if do_test:
-                            cmd_stage1.extend(["-to", str(min(e_sec, s_sec + 10.0))])
-                        else:
-                            cmd_stage1.extend(["-to", str(e_sec)])
-                        cmd_stage1.extend(["-i", str(mkv_path)])
 
                     filter_lines = []
                     for idx in range(len(segments)):
@@ -376,67 +368,34 @@ def main():
                         "-c:v", "rawvideo", "-pix_fmt", "yuv420p",
                         "-f", "nut", "pipe:1"
                     ])
-
-                    # Stage 2: Ingest nut pipe -> x264 encode + Apple tags + chapter metadata
-                    meta_idx = 1
-                    cmd_stage2 = [
-                        "ffmpeg", "-nostdin", "-y", "-loglevel", "warning",
-                        "-f", "nut", "-i", "pipe:0",
-                        "-i", meta_path,
-                        "-map", "0:v",
-                        "-map", "0:a",
-                        "-map_metadata", str(meta_idx),
-                        "-map_chapters", str(meta_idx),
-                        "-movflags", "+faststart",
-                        "-c:v", "libx264", "-crf", "22", "-preset", "slow",
-                        "-force_key_frames", "expr:eq(n,0)", "-g", "60",
-                        "-pix_fmt", "yuv420p", "-tag:v", "avc1",
-                        "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m",
-                        "-c:a", "aac", "-b:a", "192k",
-                        "-shortest",
-                        str(output_mp4)
-                    ]
-
                 else:
-                    clip_start = segments[0][0]
-                    if do_test:
-                        clip_end = min(segments[-1][1], clip_start + 10.0)
-                    else:
-                        clip_end = segments[-1][1]
-
                     print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}clip (two-stage pipe): {clip.title}...", end="", flush=True)
 
-                    # Stage 1: Single segment stream to nut pipe (reset PTS + async audio sync)
-                    cmd_stage1 = [
-                        "ffmpeg", "-nostdin", "-y", "-loglevel", "warning",
-                        "-fflags", "+genpts+discardcorrupt",
-                        "-ss", str(clip_start),
-                        "-to", str(clip_end),
-                        "-i", str(mkv_path),
+                    cmd_stage1.extend([
                         "-vf", vf_base,
                         "-af", "aresample=async=1",
                         "-c:v", "rawvideo", "-pix_fmt", "yuv420p",
                         "-f", "nut", "pipe:1"
-                    ]
+                    ])
 
-                    # Stage 2: Ingest nut pipe -> x264 encode + Apple tags + chapter metadata
-                    cmd_stage2 = [
-                        "ffmpeg", "-nostdin", "-y", "-loglevel", "warning",
-                        "-f", "nut", "-i", "pipe:0",
-                        "-i", meta_path,
-                        "-map", "0:v",
-                        "-map", "0:a",
-                        "-map_metadata", "1",
-                        "-map_chapters", "1",
-                        "-movflags", "+faststart",
-                        "-c:v", "libx264", "-crf", "22", "-preset", "slow",
-                        "-force_key_frames", "expr:eq(n,0)", "-g", "60",
-                        "-pix_fmt", "yuv420p", "-tag:v", "avc1",
-                        "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m",
-                        "-c:a", "aac", "-b:a", "192k",
-                        "-shortest",
-                        str(output_mp4)
-                    ]
+                # Stage 2: Ingest nut pipe -> x264 encode + Apple tags + chapter metadata
+                cmd_stage2 = [
+                    "ffmpeg", "-nostdin", "-y", "-loglevel", "warning",
+                    "-f", "nut", "-i", "pipe:0",
+                    "-i", meta_path,
+                    "-map", "0:v",
+                    "-map", "0:a",
+                    "-map_metadata", "1",
+                    "-map_chapters", "1",
+                    "-movflags", "+faststart",
+                    "-c:v", "libx264", "-crf", "22", "-preset", "slow",
+                    "-force_key_frames", "expr:eq(n,0)", "-g", "60",
+                    "-pix_fmt", "yuv420p", "-tag:v", "avc1",
+                    "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest",
+                    str(output_mp4)
+                ]
 
                 log_file.write(f"\n--- Encoding Clip [{clip.idx}]: {clip.title} {'(TEST)' if do_test else ''} ---\n")
                 log_file.flush()

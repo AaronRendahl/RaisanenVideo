@@ -2,18 +2,44 @@
 """
 03_make_clips.py
 
-CLI entrypoint to generate derivative MP4 clips (1 continuous file per top-level Clip)
-with embedded MP4 chapter markers for subchapters, plus per-subchapter diagnostic frame snapshots.
+Generates web-ready MP4 derivative clips from clean Matroska (.mkv) archival versions.
+Processes clip bounds, applies subchapter markers, handles gap splicing, and extracts
+diagnostic frame snapshots for cut and crop validation.
 
-Uses fast input seeking (-ss / -to before -i) for maximum speed.
+Usage:
+  ./scripts/03_make_clips.py [FLAGS] <TAPE_NAME>
 
-Output Organization:
-  - MP4 Clips:      02_clips/<TAPE_NAME>/<TAPE_NAME>_<CLIP_IDX>_<TITLE>.mp4
-  - Diagnostics:    02_clips/<TAPE_NAME>-log/ (PNG snapshots & ffmpeg_encode.log)
+Flags:
+  --uncropped-frames  Extracts uncropped PNG snapshots ('a.png') for crop evaluation.
+                      Clears previous 'a.png' files; leaves 'b.png' intact.
 
-Diagnostic Naming:
-  <TAPE>_<CLIP_IDX>_<SUBCHAPTER_IDX>-<POSITION><a|b>.png
-  Where 'a' = uncropped frame, 'b' = cropped frame.
+  --cropped-frames    Extracts cropped PNG snapshots ('b.png') using current spec crop parameters.
+                      Clears previous 'b.png' files; leaves 'a.png' intact for side-by-side review.
+
+  --frames-only       Shortcut flag to generate both uncropped ('a') and cropped ('b') PNG snapshots.
+
+  --clean, --clean-log Wipes all PNG snapshots and log files in the diagnostic directory and exits.
+
+  (No Flags)          Runs full derivative clip MP4 encoding pipeline. Does not extract PNGs.
+
+Directory Structure:
+  Input Archival:     01_archive/<TAPE_NAME>.mkv
+  Input Spec:         03_specs/<TAPE_NAME>.txt
+  Output Clips:       02_clips/<TAPE_NAME>/<TAPE_NAME>_<CLIP_IDX>_<TITLE>.mp4
+  Diagnostics & Log:  02_clips/<TAPE_NAME>-log/
+
+Diagnostic Frame Naming Convention:
+  <TAPE>_<CLIP_IDX>_<TITLE>_<SUBCHAPTER_IDX>-<POSITION><a|b>.png
+
+  Positions:  1 = Subchapter Start
+              2 = Subchapter Midpoint
+              3 = Subchapter End
+
+  Variants:   a = Uncropped frame
+              b = Cropped frame
+
+  Example:    Raisanen-1987a_01_First_Videos_1-1a.png (Subchapter 1, start frame, uncropped)
+              Raisanen-1987a_01_First_Videos_1-1b.png (Subchapter 1, start frame, cropped)
 """
 
 import sys
@@ -255,7 +281,10 @@ def main():
                             cmd_uncropped = [
                                 "ffmpeg", "-y", "-loglevel", "warning",
                                 "-ss", str(t_sec), "-i", str(mkv_path),
-                                "-vframes", "1", str(uncropped_out)
+                                "-vf", "format=rgb24",
+                                "-vframes", "1", "-update", "1", 
+                                "-sws_flags", "fast_bilinear",
+                                str(uncropped_out)
                             ]
                             subprocess.run(cmd_uncropped, stdout=log_file, stderr=log_file, check=True)
 
@@ -266,7 +295,9 @@ def main():
                                 cmd_cropped = [
                                     "ffmpeg", "-y", "-loglevel", "warning",
                                     "-ss", str(t_sec), "-i", str(mkv_path),
-                                    "-vf", ffmpeg_crop, "-vframes", "1", str(cropped_out)
+                                    "-vf", f"{ffmpeg_crop},format=rgb24", 
+                                    "-vframes", "1", "-update", "1", 
+                                    str(cropped_out)
                                 ]
                                 subprocess.run(cmd_cropped, stdout=log_file, stderr=log_file, check=True)
                             else:

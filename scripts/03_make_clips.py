@@ -3,8 +3,8 @@
 03_make_clips.py
 
 Generates web-ready MP4 derivative clips from clean Matroska (.mkv) archival versions.
-Processes clip bounds, applies subchapter markers, handles gap splicing, and extracts
-diagnostic frame snapshots for cut and crop validation.
+Uses a two-stage piped architecture (NUT RAM pipe) for robust macOS Finder preview
+generation, Apple AVC1 compatibility, and audio/video PTS synchronization.
 
 Usage:
   ./scripts/03_make_clips.py [FLAGS] <TAPE_NAME>
@@ -30,16 +30,6 @@ Directory Structure:
   Input Spec:         03_specs/<TAPE_NAME>.txt
   Output Clips:       02_clips/<TAPE_NAME>/<TAPE_NAME>_<CLIP_IDX>_<TITLE>.mp4
   Diagnostics & Log:  02_clips/<TAPE_NAME>-log/
-
-Diagnostic Frame Naming Convention:
-  <TAPE>_<CLIP_IDX>_<TITLE>_<SUBCHAPTER_IDX>-<POSITION><a|b>.png
-
-  Positions:  1 = Subchapter Start
-              2 = Subchapter Midpoint
-              3 = Subchapter End
-
-  Variants:   a = Uncropped frame
-              b = Cropped frame
 """
 
 import sys
@@ -322,7 +312,7 @@ def main():
                 print(f" Done ({elapsed_str})")
                 continue
 
-            # Determine destination output file & time limits
+            # Determine destination output file
             if do_test:
                 output_mp4 = tape_log_dir / f"{clip_prefix}_test.mp4"
             else:
@@ -341,48 +331,55 @@ def main():
                 meta_file.write(ffmeta_content)
                 meta_path = meta_file.name
 
-            # Apple compatibility flags
-            apple_compat_flags = [
-                "-pix_fmt", "yuv420p", "-tag:v", "avc1",
-                "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m"
-            ]
-
             try:
                 if is_gapped or len(segments) > 1:
-                    print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}concatenated clip: {clip.title}...", end="", flush=True)
-                    cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
+                    print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}concatenated clip (two-stage pipe): {clip.title}...", end="", flush=True)
                     
-                    # Fast input-side seeking: -ss / -to BEFORE -i
+                    # Stage 1: Demux, seek, deinterlace, crop, resample -> stream raw YUV to nut pipe
+                    cmd_stage1 = ["ffmpeg", "-nostdin", "-y", "-loglevel", "warning", "-fflags", "+genpts+discardcorrupt"]
+                    
                     for s_sec, e_sec, _ in segments:
-                        cmd.extend(["-ss", str(s_sec)])
+                        cmd_stage1.extend(["-ss", str(s_sec)])
                         if do_test:
-                            # Clamp segment to max 10 seconds for test mode
-                            cmd.extend(["-to", str(min(e_sec, s_sec + 10.0))])
+                            cmd_stage1.extend(["-to", str(min(e_sec, s_sec + 10.0))])
                         else:
-                            cmd.extend(["-to", str(e_sec)])
-                        cmd.extend(["-i", str(mkv_path)])
+                            cmd_stage1.extend(["-to", str(e_sec)])
+                        cmd_stage1.extend(["-i", str(mkv_path)])
 
                     filter_lines = []
                     for idx in range(len(segments)):
                         filter_lines.append(f"[{idx}:v]{vf_base}[v{idx}];")
-                        filter_lines.append(f"[{idx}:a]anull[a{idx}];")
+                        filter_lines.append(f"[{idx}:a]aresample=async=1[a{idx}];")
                     
                     concat_inputs = "".join(f"[v{idx}][a{idx}]" for idx in range(len(segments)))
                     filter_lines.append(f"{concat_inputs}concat=n={len(segments)}:v=1:a=1[outv][outa]")
                     
-                    meta_idx = len(segments)
-                    cmd.extend([
-                        "-i", meta_path,
+                    cmd_stage1.extend([
                         "-filter_complex", "".join(filter_lines),
                         "-map", "[outv]",
                         "-map", "[outa]",
-                        "-map_metadata", f"{meta_idx}",
-                        "-map_chapters", f"{meta_idx}",
-                        "-movflags", "+faststart",
-                        "-c:v", "libx264", "-crf", "22", "-preset", "slow"
+                        "-c:v", "rawvideo", "-pix_fmt", "yuv420p",
+                        "-f", "nut", "pipe:1"
                     ])
-                    cmd.extend(apple_compat_flags)
-                    cmd.extend(["-c:a", "aac", "-b:a", "192k", str(output_mp4)])
+
+                    # Stage 2: Ingest nut pipe -> x264 encode + Apple tags + chapter metadata
+                    meta_idx = 1
+                    cmd_stage2 = [
+                        "ffmpeg", "-nostdin", "-y", "-loglevel", "warning",
+                        "-f", "nut", "-i", "pipe:0",
+                        "-i", meta_path,
+                        "-map", "0:v",
+                        "-map", "0:a",
+                        "-map_metadata", str(meta_idx),
+                        "-map_chapters", str(meta_idx),
+                        "-movflags", "+faststart",
+                        "-c:v", "libx264", "-crf", "22", "-preset", "slow",
+                        "-pix_fmt", "yuv420p", "-tag:v", "avc1", "-g", "60",
+                        "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m",
+                        "-c:a", "aac", "-b:a", "192k",
+                        "-shortest",
+                        str(output_mp4)
+                    ]
 
                 else:
                     clip_start = segments[0][0]
@@ -391,28 +388,53 @@ def main():
                     else:
                         clip_end = segments[-1][1]
 
-                    print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}clip: {clip.title}...", end="", flush=True)
-                    
-                    # Fast input-side seeking: -ss / -to BEFORE -i
-                    cmd = [
-                        "ffmpeg", "-y", "-loglevel", "warning",
+                    print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}clip (two-stage pipe): {clip.title}...", end="", flush=True)
+
+                    # Stage 1: Single segment stream to nut pipe
+                    cmd_stage1 = [
+                        "ffmpeg", "-nostdin", "-y", "-loglevel", "warning",
+                        "-fflags", "+genpts+discardcorrupt",
                         "-ss", str(clip_start),
                         "-to", str(clip_end),
                         "-i", str(mkv_path),
+                        "-vf", vf_base,
+                        "-af", "aresample=async=1",
+                        "-c:v", "rawvideo", "-pix_fmt", "yuv420p",
+                        "-f", "nut", "pipe:1"
+                    ]
+
+                    # Stage 2: Ingest nut pipe -> x264 encode + Apple tags + chapter metadata
+                    cmd_stage2 = [
+                        "ffmpeg", "-nostdin", "-y", "-loglevel", "warning",
+                        "-f", "nut", "-i", "pipe:0",
                         "-i", meta_path,
+                        "-map", "0:v",
+                        "-map", "0:a",
                         "-map_metadata", "1",
                         "-map_chapters", "1",
                         "-movflags", "+faststart",
-                        "-vf", vf_base,
-                        "-c:v", "libx264", "-crf", "22", "-preset", "slow"
+                        "-c:v", "libx264", "-crf", "22", "-preset", "slow",
+                        "-pix_fmt", "yuv420p", "-tag:v", "avc1", "-g", "60",
+                        "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m",
+                        "-c:a", "aac", "-b:a", "192k",
+                        "-shortest",
+                        str(output_mp4)
                     ]
-                    cmd.extend(apple_compat_flags)
-                    cmd.extend(["-c:a", "aac", "-b:a", "192k", str(output_mp4)])
 
                 log_file.write(f"\n--- Encoding Clip [{clip.idx}]: {clip.title} {'(TEST)' if do_test else ''} ---\n")
                 log_file.flush()
-                subprocess.run(cmd, stdout=log_file, stderr=log_file, check=True)
+
+                # Execute Stage 1 and Stage 2 connected via stdout/stdin pipe
+                p1 = subprocess.Popen(cmd_stage1, stdout=subprocess.PIPE, stderr=log_file)
+                p2 = subprocess.Popen(cmd_stage2, stdin=p1.stdout, stdout=log_file, stderr=log_file)
                 
+                # Allow p1 to receive a SIGPIPE if p2 exits early
+                p1.stdout.close()
+                p2.communicate()
+
+                if p2.returncode != 0:
+                    raise subprocess.CalledProcessError(p2.returncode, cmd_stage2)
+
                 elapsed_str = format_elapsed_time(time.perf_counter() - clip_start_time)
                 print(f" Done ({elapsed_str})")
                 log_file.write(f"Completed in {elapsed_str}\n")

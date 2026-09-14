@@ -129,7 +129,7 @@ def generate_concat_ffmetadata(clip, segments) -> str:
     return "\n".join(lines) + "\n"
 
 
-def clean_directory(dir_path: Path, do_uncropped: bool, do_cropped: bool, frames_mode: bool):
+def clean_directory(dir_path: Path, do_uncropped: bool = False, do_cropped: bool = False, frames_mode: bool = False, clean_all: bool = False):
     """Targeted removal of PNG snapshots and log files based on run mode."""
     if not dir_path.exists():
         return
@@ -139,6 +139,11 @@ def clean_directory(dir_path: Path, do_uncropped: bool, do_cropped: bool, frames
         
         name = item.name.lower()
         
+        if clean_all:
+            if name.endswith(".png") or name.endswith(".log"):
+                item.unlink()
+            continue
+
         # If running full encode, clear log file
         if not frames_mode and name.endswith(".log"):
             item.unlink()
@@ -154,9 +159,10 @@ def clean_directory(dir_path: Path, do_uncropped: bool, do_cropped: bool, frames
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: ./scripts/03_make_clips.py [--uncropped-frames | --cropped-frames | --frames-only] <TAPE_NAME>")
+        print("Usage: ./scripts/03_make_clips.py [--clean | --uncropped-frames | --cropped-frames | --frames-only] <TAPE_NAME>")
         sys.exit(1)
 
+    do_clean = "--clean" in sys.argv or "--clean-log" in sys.argv
     do_uncropped = "--uncropped-frames" in sys.argv or "--frames-only" in sys.argv
     do_cropped = "--cropped-frames" in sys.argv or "--frames-only" in sys.argv
     frames_mode = do_uncropped or do_cropped
@@ -168,6 +174,22 @@ def main():
         sys.exit(1)
 
     tape_name = Path(tape_args[0]).stem
+
+    CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Directory setup
+    tape_output_dir = CLIPS_DIR / tape_name
+    tape_log_dir = CLIPS_DIR / f"{tape_name}-log"
+
+    tape_output_dir.mkdir(exist_ok=True)
+    tape_log_dir.mkdir(exist_ok=True)
+
+    # Handle --clean flag
+    if do_clean:
+        print(f"Cleaning diagnostic directory: {tape_log_dir}")
+        clean_directory(tape_log_dir, clean_all=True)
+        print("Clean complete!")
+        sys.exit(0)
 
     spec_path = SPECS_DIR / f"{tape_name}.txt"
     mkv_path = ARCHIVE_DIR / f"{tape_name}.mkv"
@@ -183,15 +205,6 @@ def main():
     total_duration_str = get_video_duration(str(mkv_path))
     data.resolve_missing_end_times(total_duration_str)
     total_duration_sec = parse_timestamp_to_seconds(total_duration_str)
-
-    CLIPS_DIR.mkdir(parents=True, exist_ok=True)
-    
-    # Directory setup
-    tape_output_dir = CLIPS_DIR / tape_name
-    tape_log_dir = CLIPS_DIR / f"{tape_name}-log"
-
-    tape_output_dir.mkdir(exist_ok=True)
-    tape_log_dir.mkdir(exist_ok=True)
 
     # Clean up previous target images without affecting preserved counterparts
     clean_directory(tape_log_dir, do_uncropped, do_cropped, frames_mode)

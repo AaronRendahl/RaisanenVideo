@@ -18,6 +18,9 @@ Flags:
 
   --frames-only       Shortcut flag to generate both uncropped ('a') and cropped ('b') PNG snapshots.
 
+  --test, --test-clips Encodes 10-second sample MP4s into the log folder to quickly verify
+                      macOS Finder previews and cut quality without full encoding.
+
   --clean, --clean-log Removes the entire diagnostic directory (<TAPE_NAME>-log) and exits.
 
   (No Flags)          Runs full derivative clip MP4 encoding pipeline. Does not extract PNGs.
@@ -37,9 +40,6 @@ Diagnostic Frame Naming Convention:
 
   Variants:   a = Uncropped frame
               b = Cropped frame
-
-  Example:    Raisanen-1987a_01_First_Videos_1-1a.png (Subchapter 1, start frame, uncropped)
-              Raisanen-1987a_01_First_Videos_1-1b.png (Subchapter 1, start frame, cropped)
 """
 
 import sys
@@ -165,8 +165,8 @@ def generate_concat_ffmetadata(clip, segments) -> str:
     return "\n".join(lines) + "\n"
 
 
-def clean_directory(dir_path: Path, do_uncropped: bool = False, do_cropped: bool = False, frames_mode: bool = False):
-    """Targeted removal of PNG snapshots and log files based on run mode."""
+def clean_directory(dir_path: Path, do_uncropped: bool = False, do_cropped: bool = False, frames_mode: bool = False, test_mode: bool = False):
+    """Targeted removal of PNG snapshots, test MP4s, and log files based on run mode."""
     if not dir_path.exists():
         return
     for item in dir_path.iterdir():
@@ -175,25 +175,30 @@ def clean_directory(dir_path: Path, do_uncropped: bool = False, do_cropped: bool
         
         name = item.name.lower()
 
-        # If running full encode, clear log file
-        if not frames_mode and name.endswith(".log"):
+        # Clear previous test clips when running test mode
+        if test_mode and name.endswith("_test.mp4"):
             item.unlink()
 
-        # If generating uncropped frames ('a.png'), wipe previous 'a.png' files
+        # Clear main log file when running standard full encode
+        if not frames_mode and not test_mode and name.endswith(".log"):
+            item.unlink()
+
+        # Clear previous 'a.png' files
         if do_uncropped and name.endswith("a.png"):
             item.unlink()
 
-        # If generating cropped frames ('b.png'), wipe previous 'b.png' files
+        # Clear previous 'b.png' files
         if do_cropped and name.endswith("b.png"):
             item.unlink()
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: ./scripts/03_make_clips.py [--clean | --uncropped-frames | --cropped-frames | --frames-only] <TAPE_NAME>")
+        print("Usage: ./scripts/03_make_clips.py [--clean | --test | --uncropped-frames | --cropped-frames | --frames-only] <TAPE_NAME>")
         sys.exit(1)
 
     do_clean = "--clean" in sys.argv or "--clean-log" in sys.argv
+    do_test = "--test" in sys.argv or "--test-clips" in sys.argv
     do_uncropped = "--uncropped-frames" in sys.argv or "--frames-only" in sys.argv
     do_cropped = "--cropped-frames" in sys.argv or "--frames-only" in sys.argv
     frames_mode = do_uncropped or do_cropped
@@ -240,12 +245,14 @@ def main():
     data.resolve_missing_end_times(total_duration_str)
     total_duration_sec = parse_timestamp_to_seconds(total_duration_str)
 
-    # Clean up previous target images without affecting preserved counterparts
-    clean_directory(tape_log_dir, do_uncropped, do_cropped, frames_mode)
+    # Clean up previous target images/test clips without affecting preserved counterparts
+    clean_directory(tape_log_dir, do_uncropped, do_cropped, frames_mode, do_test)
 
     log_file_path = tape_log_dir / "ffmpeg_encode.log"
 
-    if frames_mode:
+    if do_test:
+        print(f"Generating 10-second TEST clips in: {tape_log_dir}")
+    elif frames_mode:
         mode_desc = []
         if do_uncropped:
             mode_desc.append("uncropped ('a')")
@@ -253,7 +260,7 @@ def main():
             mode_desc.append("cropped ('b')")
         print(f"Generating {' and '.join(mode_desc)} diagnostic frames for: {tape_name}")
     else:
-        print(f"Encoding clip MP4s for: {tape_name}")
+        print(f"Encoding full clip MP4s for: {tape_name}")
 
     print(f"Clips Directory:     {tape_output_dir}")
     print(f"Diagnostics & Logs:  {tape_log_dir}\n")
@@ -315,7 +322,12 @@ def main():
                 print(f" Done ({elapsed_str})")
                 continue
 
-            output_mp4 = tape_output_dir / f"{clip_prefix}.mp4"
+            # Determine destination output file & time limits
+            if do_test:
+                output_mp4 = tape_log_dir / f"{clip_prefix}_test.mp4"
+            else:
+                output_mp4 = tape_output_dir / f"{clip_prefix}.mp4"
+
             is_gapped = has_gaps(segments)
 
             # Common video filter setup
@@ -329,14 +341,26 @@ def main():
                 meta_file.write(ffmeta_content)
                 meta_path = meta_file.name
 
+            # Apple compatibility flags
+            apple_compat_flags = [
+                "-pix_fmt", "yuv420p", "-tag:v", "avc1",
+                "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m"
+            ]
+
             try:
                 if is_gapped or len(segments) > 1:
-                    print(f"[{clip.idx}] Encoding concatenated clip: {clip.title} ({len(segments)} segments)...", end="", flush=True)
+                    print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}concatenated clip: {clip.title}...", end="", flush=True)
                     cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
                     
                     # Fast input-side seeking: -ss / -to BEFORE -i
                     for s_sec, e_sec, _ in segments:
-                        cmd.extend(["-ss", str(s_sec), "-to", str(e_sec), "-i", str(mkv_path)])
+                        cmd.extend(["-ss", str(s_sec)])
+                        if do_test:
+                            # Clamp segment to max 10 seconds for test mode
+                            cmd.extend(["-to", str(min(e_sec, s_sec + 10.0))])
+                        else:
+                            cmd.extend(["-to", str(e_sec)])
+                        cmd.extend(["-i", str(mkv_path)])
 
                     filter_lines = []
                     for idx in range(len(segments)):
@@ -355,14 +379,19 @@ def main():
                         "-map_metadata", f"{meta_idx}",
                         "-map_chapters", f"{meta_idx}",
                         "-movflags", "+faststart",
-                        "-c:v", "libx264", "-crf", "22", "-preset", "slow",
-                        "-c:a", "aac", "-b:a", "192k",
-                        str(output_mp4)
+                        "-c:v", "libx264", "-crf", "22", "-preset", "slow"
                     ])
+                    cmd.extend(apple_compat_flags)
+                    cmd.extend(["-c:a", "aac", "-b:a", "192k", str(output_mp4)])
+
                 else:
                     clip_start = segments[0][0]
-                    clip_end = segments[-1][1]
-                    print(f"[{clip.idx}] Encoding single clip: {clip.title}...", end="", flush=True)
+                    if do_test:
+                        clip_end = min(segments[-1][1], clip_start + 10.0)
+                    else:
+                        clip_end = segments[-1][1]
+
+                    print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}clip: {clip.title}...", end="", flush=True)
                     
                     # Fast input-side seeking: -ss / -to BEFORE -i
                     cmd = [
@@ -375,12 +404,12 @@ def main():
                         "-map_chapters", "1",
                         "-movflags", "+faststart",
                         "-vf", vf_base,
-                        "-c:v", "libx264", "-crf", "22", "-preset", "slow",
-                        "-c:a", "aac", "-b:a", "192k",
-                        str(output_mp4)
+                        "-c:v", "libx264", "-crf", "22", "-preset", "slow"
                     ]
+                    cmd.extend(apple_compat_flags)
+                    cmd.extend(["-c:a", "aac", "-b:a", "192k", str(output_mp4)])
 
-                log_file.write(f"\n--- Encoding Clip [{clip.idx}]: {clip.title} ---\n")
+                log_file.write(f"\n--- Encoding Clip [{clip.idx}]: {clip.title} {'(TEST)' if do_test else ''} ---\n")
                 log_file.flush()
                 subprocess.run(cmd, stdout=log_file, stderr=log_file, check=True)
                 

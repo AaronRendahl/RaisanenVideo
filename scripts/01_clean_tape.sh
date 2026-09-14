@@ -2,7 +2,7 @@
 #
 # 01_clean_tape.sh
 #
-# Remuxes raw analog capture files into standardized, clean Matroska (.mkv) masters.
+# Remuxes raw analog capture files into standardized, clean Matroska (.mkv) archival versions.
 # Rebuilds presentation timestamps (PTS) while preserving all video frames
 # to guarantee rock-solid timestamp accuracy and perfect A/V sync.
 #
@@ -81,4 +81,4 @@ else
       "$OUTPUT_FILE"
 fi
 
-echo "Done! Master created successfully at: $OUTPUT_FILE"
+echo "Done! Archival version created successfully at: $OUTPUT_FILE"

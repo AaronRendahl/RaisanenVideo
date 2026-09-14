@@ -3,13 +3,21 @@
 03_make_clips.py
 
 CLI entrypoint to generate derivative MP4 clips (1 continuous file per top-level Clip)
-with embedded MP4 chapter markers for subchapters, plus diagnostic frame snapshots.
-Splices out all gaps (down to frame-level artifacts) between subchapters and logs
-FFmpeg output to 02_clips/<TAPE_NAME>/ffmpeg_encode.log. Includes +faststart for
-optimized web/preview playback.
+with embedded MP4 chapter markers for subchapters, plus per-subchapter diagnostic frame snapshots.
+
+Uses fast input seeking (-ss / -to before -i) for maximum speed.
+
+Output Organization:
+  - MP4 Clips:      02_clips/<TAPE_NAME>/<TAPE_NAME>_<CLIP_IDX>_<TITLE>.mp4
+  - Diagnostics:    02_clips/<TAPE_NAME>-log/ (PNG snapshots & ffmpeg_encode.log)
+
+Diagnostic Naming:
+  <TAPE>_<CLIP_IDX>_<SUBCHAPTER_IDX>-<POSITION><a|b>.png
+  Where 'a' = uncropped frame, 'b' = cropped frame.
 """
 
 import sys
+import shutil
 import tempfile
 import subprocess
 from pathlib import Path
@@ -121,13 +129,39 @@ def generate_concat_ffmetadata(clip, segments) -> str:
     return "\n".join(lines) + "\n"
 
 
+def clean_directory(dir_path: Path, do_uncropped: bool, do_cropped: bool, frames_mode: bool):
+    """Targeted removal of PNG snapshots and log files based on run mode."""
+    if not dir_path.exists():
+        return
+    for item in dir_path.iterdir():
+        if not item.is_file():
+            continue
+        
+        name = item.name.lower()
+        
+        # If running full encode, clear log file
+        if not frames_mode and name.endswith(".log"):
+            item.unlink()
+
+        # If generating uncropped frames ('a.png'), wipe previous 'a.png' files
+        if do_uncropped and name.endswith("a.png"):
+            item.unlink()
+
+        # If generating cropped frames ('b.png'), wipe previous 'b.png' files
+        if do_cropped and name.endswith("b.png"):
+            item.unlink()
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: ./scripts/03_make_clips.py [--frames-only] <TAPE_NAME>")
+        print("Usage: ./scripts/03_make_clips.py [--uncropped-frames | --cropped-frames | --frames-only] <TAPE_NAME>")
         sys.exit(1)
 
-    frames_only = "--frames-only" in sys.argv
-    tape_args = [arg for arg in sys.argv[1:] if arg != "--frames-only"]
+    do_uncropped = "--uncropped-frames" in sys.argv or "--frames-only" in sys.argv
+    do_cropped = "--cropped-frames" in sys.argv or "--frames-only" in sys.argv
+    frames_mode = do_uncropped or do_cropped
+
+    tape_args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
 
     if not tape_args:
         print("Error: Missing tape name argument.")
@@ -142,7 +176,7 @@ def main():
         print(f"Error: Spec file not found at '{spec_path}'")
         sys.exit(1)
     if not mkv_path.exists():
-        print(f"Error: Archival MKV not found at '{mkv_path}'")
+        print(f"Error: Archival version not found at '{mkv_path}'")
         sys.exit(1)
 
     data = read_tape_spec(spec_path.read_text())
@@ -151,13 +185,31 @@ def main():
     total_duration_sec = parse_timestamp_to_seconds(total_duration_str)
 
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
-    tape_clips_dir = CLIPS_DIR / tape_name
-    tape_clips_dir.mkdir(exist_ok=True)
+    
+    # Directory setup
+    tape_output_dir = CLIPS_DIR / tape_name
+    tape_log_dir = CLIPS_DIR / f"{tape_name}-log"
 
-    log_file_path = tape_clips_dir / "ffmpeg_encode.log"
+    tape_output_dir.mkdir(exist_ok=True)
+    tape_log_dir.mkdir(exist_ok=True)
 
-    print(f"{'Generating diagnostic frames' if frames_only else 'Encoding clip MP4s'} for: {tape_name}")
-    print(f"Logging FFmpeg output to: {log_file_path}")
+    # Clean up previous target images without affecting preserved counterparts
+    clean_directory(tape_log_dir, do_uncropped, do_cropped, frames_mode)
+
+    log_file_path = tape_log_dir / "ffmpeg_encode.log"
+
+    if frames_mode:
+        mode_desc = []
+        if do_uncropped:
+            mode_desc.append("uncropped ('a')")
+        if do_cropped:
+            mode_desc.append("cropped ('b')")
+        print(f"Generating {' and '.join(mode_desc)} diagnostic frames for: {tape_name}")
+    else:
+        print(f"Encoding clip MP4s for: {tape_name}")
+
+    print(f"Clips Directory:     {tape_output_dir}")
+    print(f"Diagnostics & Logs:  {tape_log_dir}")
 
     with open(log_file_path, "a", encoding="utf-8") as log_file:
         for clip in data.clips:
@@ -170,36 +222,45 @@ def main():
             crop_val = clip.crop if clip.crop else data.global_crop
             ffmpeg_crop = build_crop_filter(crop_val)
 
-            if frames_only:
-                first_sec = segments[0][0]
-                mid_seg = segments[len(segments) // 2]
-                mid_sec = mid_seg[0] + ((mid_seg[1] - mid_seg[0]) / 2.0)
-                last_sec = max(segments[-1][0], segments[-1][1] - 0.1)
-
-                timestamps = [("1", first_sec), ("2", mid_sec), ("3", last_sec)]
+            if frames_mode:
+                print(f"[{clip.idx}] Capturing per-subchapter diagnostic frames for: {clip.title}")
                 
-                for num_code, t_sec in timestamps:
-                    uncropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}a.png"
-                    cmd_uncropped = [
-                        "ffmpeg", "-y", "-loglevel", "warning",
-                        "-ss", str(t_sec), "-i", str(mkv_path),
-                        "-vframes", "1", str(uncropped_out)
-                    ]
-                    subprocess.run(cmd_uncropped, stdout=log_file, stderr=log_file, check=True)
+                # Iterate over every subchapter segment
+                for sub_idx, (s_sec, e_sec, sub_title) in enumerate(segments, start=1):
+                    mid_sec = s_sec + ((e_sec - s_sec) / 2.0)
+                    end_sec = max(s_sec, e_sec - 0.1)
 
-                    if ffmpeg_crop:
-                        cropped_out = tape_clips_dir / f"{clip_prefix}_{num_code}b.png"
-                        cmd_cropped = [
-                            "ffmpeg", "-y", "-loglevel", "warning",
-                            "-ss", str(t_sec), "-i", str(mkv_path),
-                            "-vf", ffmpeg_crop, "-vframes", "1", str(cropped_out)
-                        ]
-                        subprocess.run(cmd_cropped, stdout=log_file, stderr=log_file, check=True)
+                    # Subchapter positions: 1=start, 2=mid, 3=end
+                    timestamps = [("1", s_sec), ("2", mid_sec), ("3", end_sec)]
+                    
+                    for pos_code, t_sec in timestamps:
+                        snapshot_prefix = f"{clip_prefix}_{sub_idx}-{pos_code}"
+                        
+                        # Uncropped snapshot (a)
+                        if do_uncropped:
+                            uncropped_out = tape_log_dir / f"{snapshot_prefix}a.png"
+                            cmd_uncropped = [
+                                "ffmpeg", "-y", "-loglevel", "warning",
+                                "-ss", str(t_sec), "-i", str(mkv_path),
+                                "-vframes", "1", str(uncropped_out)
+                            ]
+                            subprocess.run(cmd_uncropped, stdout=log_file, stderr=log_file, check=True)
 
-                print(f"[{clip.idx}] Captured diagnostic frames (1a/1b, 2a/2b, 3a/3b) for: {clip.title}")
+                        # Cropped snapshot (b)
+                        if do_cropped:
+                            if ffmpeg_crop:
+                                cropped_out = tape_log_dir / f"{snapshot_prefix}b.png"
+                                cmd_cropped = [
+                                    "ffmpeg", "-y", "-loglevel", "warning",
+                                    "-ss", str(t_sec), "-i", str(mkv_path),
+                                    "-vf", ffmpeg_crop, "-vframes", "1", str(cropped_out)
+                                ]
+                                subprocess.run(cmd_cropped, stdout=log_file, stderr=log_file, check=True)
+                            else:
+                                print(f"  Notice: No crop parameters set for clip {clip.idx}; skipping 'b' frame.")
                 continue
 
-            output_mp4 = CLIPS_DIR / f"{clip_prefix}.mp4"
+            output_mp4 = tape_output_dir / f"{clip_prefix}.mp4"
             is_gapped = has_gaps(segments)
 
             # Common video filter setup
@@ -215,9 +276,10 @@ def main():
 
             try:
                 if is_gapped or len(segments) > 1:
-                    print(f"Encoding clip [{clip.idx}]: {clip.title} ({len(segments)} segments concatenated, artifacts/gaps spliced)...")
+                    print(f"Encoding clip [{clip.idx}]: {clip.title} ({len(segments)} segments concatenated)...")
                     cmd = ["ffmpeg", "-y", "-loglevel", "warning"]
                     
+                    # Fast input-side seeking: -ss / -to BEFORE -i
                     for s_sec, e_sec, _ in segments:
                         cmd.extend(["-ss", str(s_sec), "-to", str(e_sec), "-i", str(mkv_path)])
 
@@ -247,6 +309,7 @@ def main():
                     clip_end = segments[-1][1]
                     print(f"Encoding clip [{clip.idx}]: {clip.title} (single-pass encode)...")
                     
+                    # Fast input-side seeking: -ss / -to BEFORE -i
                     cmd = [
                         "ffmpeg", "-y", "-loglevel", "warning",
                         "-ss", str(clip_start),

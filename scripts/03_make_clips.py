@@ -3,8 +3,9 @@
 03_make_clips.py
 
 Generates web-ready MP4 derivative clips from clean Matroska (.mkv) archival versions.
-Uses a two-stage piped architecture (NUT RAM pipe) for robust macOS Finder preview
-generation, Apple AVC1 compatibility, and audio/video PTS synchronization.
+Uses a two-stage piped architecture (NUT RAM pipe) with normalized PTS timestamps and
+forced initial keyframes (IDR) for robust macOS Finder preview generation, Apple AVC1
+compatibility, and precise audio/video sync.
 
 Usage:
   ./scripts/03_make_clips.py [FLAGS] <TAPE_NAME>
@@ -333,10 +334,11 @@ def main():
 
             is_gapped = has_gaps(segments)
 
-            # Common video filter setup
+            # Video filter chain (bwdif + crop + PTS reset to zero)
             vf_base = "bwdif=mode=send_field:deint=all"
             if ffmpeg_crop:
                 vf_base += f",{ffmpeg_crop}"
+            vf_base += ",setpts=PTS-STARTPTS"
 
             # Build metadata file with clamped chapter bounds for test mode
             ffmeta_content = generate_concat_ffmetadata(clip, segments, is_test=do_test)
@@ -348,7 +350,7 @@ def main():
                 if is_gapped or len(segments) > 1:
                     print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}concatenated clip (two-stage pipe): {clip.title}...", end="", flush=True)
                     
-                    # Stage 1: Demux, seek, deinterlace, crop, resample -> stream raw YUV to nut pipe
+                    # Stage 1: Demux, seek, deinterlace, crop, PTS reset -> stream raw YUV to nut pipe
                     cmd_stage1 = ["ffmpeg", "-nostdin", "-y", "-loglevel", "warning", "-fflags", "+genpts+discardcorrupt"]
                     
                     for s_sec, e_sec, _ in segments:
@@ -387,7 +389,8 @@ def main():
                         "-map_chapters", str(meta_idx),
                         "-movflags", "+faststart",
                         "-c:v", "libx264", "-crf", "22", "-preset", "slow",
-                        "-pix_fmt", "yuv420p", "-tag:v", "avc1", "-g", "60",
+                        "-force_key_frames", "expr:eq(n,0)", "-g", "60",
+                        "-pix_fmt", "yuv420p", "-tag:v", "avc1",
                         "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m",
                         "-c:a", "aac", "-b:a", "192k",
                         "-shortest",
@@ -403,7 +406,7 @@ def main():
 
                     print(f"[{clip.idx}] Encoding {'TEST ' if do_test else ''}clip (two-stage pipe): {clip.title}...", end="", flush=True)
 
-                    # Stage 1: Single segment stream to nut pipe
+                    # Stage 1: Single segment stream to nut pipe (reset PTS + async audio sync)
                     cmd_stage1 = [
                         "ffmpeg", "-nostdin", "-y", "-loglevel", "warning",
                         "-fflags", "+genpts+discardcorrupt",
@@ -427,7 +430,8 @@ def main():
                         "-map_chapters", "1",
                         "-movflags", "+faststart",
                         "-c:v", "libx264", "-crf", "22", "-preset", "slow",
-                        "-pix_fmt", "yuv420p", "-tag:v", "avc1", "-g", "60",
+                        "-force_key_frames", "expr:eq(n,0)", "-g", "60",
+                        "-pix_fmt", "yuv420p", "-tag:v", "avc1",
                         "-color_primaries", "smpte170m", "-color_trc", "smpte170m", "-colorspace", "smpte170m",
                         "-c:a", "aac", "-b:a", "192k",
                         "-shortest",
